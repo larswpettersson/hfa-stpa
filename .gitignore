@@ -1,0 +1,33 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor / local tooling
+.cursor/
+mcp.json
+*.swp
+*~
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Node / web tooling (if added later)
+node_modules/
+dist/
+build/
+.cache/
+
+# Python (if added later)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Office / temp exports
+~$*
+*.tmp
+
+# Large local-only binaries (uncomment if needed)
+# *.pptx
