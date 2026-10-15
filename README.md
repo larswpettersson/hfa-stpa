@@ -84,3 +84,7 @@ gh repo edit larswpettersson/STPA --visibility public --accept-visibility-change
 - **Bowtie** — bowtie diagram editor
 - **RBD** — reliability block diagrams
 - **HTA Tool** — hierarchical task analysis
+
+## License
+
+[MIT](LICENSE) © 2026 Lars Pettersson
