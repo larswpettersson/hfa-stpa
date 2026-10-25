@@ -19,6 +19,7 @@ Open `index.html` in a browser. It works from `file://` or any static server (fo
   - Safety constraints
 
   Any JSON structure the model proposes gets a **Load into editor** button. You can export the conversation as Markdown.
+- **Follow Penpot selection:** the diagram copies the style of whatever is selected in Penpot and keeps updating while the link is on (see [Penpot live style](#penpot-live-style)).
 - **Settings drawer:** holds the API key, model and endpoint for each provider, plus Claude effort and refusal fallback, MCP options, an editable system prompt and key storage.
 
 ## Data model
@@ -62,3 +63,35 @@ Browsers can't start stdio MCP servers, so the page uses MCP's JSON-RPC 2.0 mess
    ```
 
    The model sees remote tools alongside the local ones, and calls to them are forwarded over the bridge. Comments in `index.html` (section 5) cover the transport and how to adapt it to Streamable HTTP.
+
+## Penpot live style
+
+**Follow Penpot selection** (under the diagram) makes the diagram copy the style of the object selected in Penpot. While the link is on, the page checks the selection every few seconds, so selecting a different board or component restyles the diagram.
+
+How it works:
+1. The page calls the Penpot MCP server's `execute_code` tool, using MCP's Streamable HTTP transport.
+2. The code it runs reads `penpot.selection` and searches the selected shapes for the STPA components by layer or component name.
+3. Each match's fill, stroke, dash style, corner radius, size and font is applied to the matching part of the diagram:
+
+| Penpot component | Applied to |
+|---|---|
+| Controller | Controller boxes |
+| Controlled Process | Controlled-process boxes |
+| Connector Control | Control-action arrows |
+| Connector Feedback | Feedback arrows |
+| Group Identity Frame | A system boundary around the whole diagram, labelled with `system` |
+
+If the selection contains none of these components, its own style is used for every box. **Reset style** goes back to the theme colours. The last style is saved in this browser, so the diagram looks the same after a reload.
+
+### Setup
+
+The hosted Penpot MCP doesn't allow requests from a web page (no CORS headers), and its URL contains your user token. Run the included relay, which has no dependencies:
+
+```bash
+cd workbench
+PENPOT_MCP_URL=<your Penpot MCP user token> node penpot-relay.mjs   # listens on http://127.0.0.1:4410/mcp
+```
+
+`PENPOT_MCP_URL` is the same value that `hfa-ds/.mcp.json` uses. You can also give it a full MCP URL, for example a local Penpot MCP server. Leave **Settings → Penpot MCP URL** at its default (`http://127.0.0.1:4410/mcp`).
+
+In Penpot, open the STPA file and make sure its MCP connection is active. Select the **Control Model — Draft** board, or any of the components, then press **Follow Penpot selection**.

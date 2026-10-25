@@ -17,6 +17,7 @@
     4. Provider adapters: callLLM() for Claude / Gemini / local (Ollama, LM Studio, LocalAI)
     5. MCP layer: tool schemas in MCP format, local JSON-RPC dispatcher, optional MCP-over-SSE bridge
     6. Chat loop, Markdown rendering, quick actions
+    7. Penpot live link: follows the Penpot selection over MCP and restyles the diagram
 -->
 <style>
   :root {
@@ -100,7 +101,11 @@
   #diagram .lbl-ca, #diagram .lbl-fb { font-size: 11px; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round; }
   #diagram .lbl-ca { fill: var(--brand); }
   #diagram .lbl-fb { fill: var(--info); }
-  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--fg-muted); padding: 6px 10px; }
+  .legend { display: flex; gap: 14px; row-gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--fg-muted); padding: 6px 10px; }
+  .legend .penpot { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .legend .penpot button { padding: 2px 8px; font-size: 12px; }
+  #penpotFollow[aria-pressed="true"] { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+  #penpotState.err { color: var(--error); border-color: var(--error); }
   .legend i { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--brand); vertical-align: middle; margin-right: 4px; }
   .legend i.fb { border-top: 2px dashed var(--info); }
 
@@ -169,7 +174,14 @@
     </div>
     <textarea id="editor" spellcheck="false" aria-label="STPA JSON"></textarea>
     <div id="issues" aria-live="polite"></div>
-    <div class="legend"><span><i></i>Control action</span><span><i class="fb"></i>Feedback</span><span id="counts"></span></div>
+    <div class="legend">
+      <span><i id="swatchCa"></i>Control action</span><span><i class="fb" id="swatchFb"></i>Feedback</span><span id="counts"></span>
+      <span class="penpot">
+        <button id="penpotFollow" type="button" aria-pressed="false" title="Style the diagram like the object selected in Penpot (via Penpot MCP)">Follow Penpot selection</button>
+        <button id="penpotReset" type="button" title="Back to the default theme style">Reset style</button>
+        <span id="penpotState" class="pill" aria-live="polite">Penpot: off</span>
+      </span>
+    </div>
     <div id="diagramWrap"><svg id="diagram" role="img" aria-label="Control structure diagram"></svg></div>
   </section>
 
@@ -229,6 +241,13 @@
     <label>MCP-over-SSE gateway URL (optional) <input type="url" id="mcp_sse_url" placeholder="http://localhost:8808/sse"></label>
     <div class="row"><button id="mcpConnect" type="button">Connect gateway</button><span id="mcpState" class="pill">local tools only</span></div>
     <p class="hint">Without a gateway, tools run locally in this page. With one, remote tools are listed alongside them and routed over SSE.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Penpot (live diagram style)</legend>
+    <label>Penpot MCP URL <input type="url" id="penpot_url" placeholder="http://127.0.0.1:4410/mcp"></label>
+    <label>Check the selection every (seconds) <input type="number" id="penpot_interval" min="1" max="60" step="1"></label>
+    <p class="hint">Streamable HTTP MCP endpoint with an <code>execute_code</code> tool. The hosted Penpot MCP does not allow browser (CORS) requests, so run <code>node penpot-relay.mjs</code> next to this file and keep the default URL — the relay holds your Penpot token. In Penpot, keep the file open with its MCP connection active, then select a board or components (Controller, Controlled Process, Connector Control, Connector Feedback, Group Identity Frame).</p>
   </fieldset>
 
   <fieldset>
@@ -447,7 +466,8 @@ function validateModel(m) {
    3. Control-structure diagram (SVG, built with createElementNS — no innerHTML)
    Layout: controllers ranked top-down by control authority (explicit "level"
    wins), controlled processes on the bottom row. Control actions go down on the
-   left of each node pair, feedback goes up on the right (dashed).
+   left of each node pair, feedback goes up on the right (dashed). Colours, strokes,
+   radii, sizes and fonts switch to the linked Penpot selection when one is followed.
    ═══════════════════════════════════════════════════════════════════════════ */
 const SVGNS = "http://www.w3.org/2000/svg";
 function svgEl(tag, attrs, text) {
@@ -457,6 +477,54 @@ function svgEl(tag, attrs, text) {
   return el;
 }
 const trunc = (s, n) => (s = String(s ?? "")).length > n ? s.slice(0, n - 1) + "…" : s;
+
+/* Style of one diagram element kind ("ctrl" | "proc" | "ca" | "fb" | "frame") taken from the
+   linked Penpot selection (section 7); null means "use the theme default". When the selection
+   holds no recognised STPA component, its own style is used for all nodes. */
+function penpotStyleFor(kind) {
+  const ps = penpotLink.style;
+  if (!ps) return null;
+  const roles = ps.roles || {};
+  if (roles[kind]) return roles[kind];
+  if (!Object.keys(roles).length && (kind === "ctrl" || kind === "proc")) return ps.fallback || null;
+  return null;
+}
+const clamp = (v, lo, hi, d) => (v === null || v === undefined || v === "" || !Number.isFinite(+v)) ? d : Math.min(hi, Math.max(lo, +v));
+function dashFor(style, w) {
+  if (style === "dashed") return `${Math.max(4, w * 4)} ${Math.max(3, w * 3)}`;
+  if (style === "dotted") return `${Math.max(1, w)} ${Math.max(2.5, w * 2.5)}`;
+  return "none";
+}
+/* Inline styles are needed because the CSS rules above beat SVG presentation attributes. */
+function applyStyle(el, css) { for (const k in css) if (css[k] !== undefined && css[k] !== null) el.style.setProperty(k, String(css[k])); return el; }
+function boxCss(st) {
+  if (!st) return {};
+  const css = {};
+  if (st.fill) { css.fill = st.fill.color; if (st.fill.opacity < 1) css["fill-opacity"] = st.fill.opacity; }
+  else if (st.stroke) css.fill = "none";
+  if (st.stroke) {
+    const w = clamp(st.stroke.width, 0.5, 6, 1.5);
+    Object.assign(css, { stroke: st.stroke.color, "stroke-width": w, "stroke-dasharray": dashFor(st.stroke.style, w) });
+    if (st.stroke.opacity < 1) css["stroke-opacity"] = st.stroke.opacity;
+  } else if (st.fill) css.stroke = "none";
+  return css;
+}
+function fontCss(st, sizeScale = 1) {
+  const f = st && st.font;
+  if (!f) return {};
+  const css = {};
+  if (f.color) css.fill = f.color;
+  if (f.family && f.family !== "mixed") css["font-family"] = `"${f.family}", var(--font)`;
+  if (f.size) css["font-size"] = clamp(f.size * sizeScale, 8, 22, 12) + "px";
+  if (f.weight && f.weight !== "mixed") css["font-weight"] = f.weight;
+  return css;
+}
+function lineStyle(kind) {
+  const st = penpotStyleFor(kind), l = st && (st.line || st.stroke);
+  if (!l) return null;
+  const w = clamp(l.width, 0.5, 4, 1.5);
+  return { color: l.color, css: { stroke: l.color, "stroke-width": w, "stroke-dasharray": dashFor(l.style, w), "stroke-opacity": l.opacity < 1 ? l.opacity : null } };
+}
 
 function renderDiagram(m) {
   const svg = $("diagram");
@@ -478,66 +546,112 @@ function renderDiagram(m) {
   const rows = levels.map((lv) => ctrls.filter((c) => rank.get(c.id) === lv).map((c) => ({ ...c, kind: "ctrl" })));
   if (procs.length) rows.push(procs.map((p) => ({ ...p, kind: "proc" })));
 
-  const W = 180, H = 56, GAPX = 60, ROWH = 170, PAD = 30;
+  // Node sizes follow the Penpot components when linked; the grid cell fits the largest.
+  const nodeStyle = { ctrl: penpotStyleFor("ctrl"), proc: penpotStyleFor("proc") };
+  const size = (st) => ({ w: clamp(st && st.width, 100, 320, 180), h: clamp(st && st.height, 36, 140, 56) });
+  const sz = { ctrl: size(nodeStyle.ctrl), proc: size(nodeStyle.proc) };
+  const W = Math.max(sz.ctrl.w, sz.proc.w), H = Math.max(sz.ctrl.h, sz.proc.h);
+  const frameStyle = penpotStyleFor("frame");
+  const GAPX = 60, ROWH = H + 114, PAD = frameStyle ? 56 : 30;
   const width = Math.max(560, Math.max(1, ...rows.map((r) => r.length)) * (W + GAPX) + PAD * 2);
   const height = rows.length * ROWH - (ROWH - H) + PAD * 2;
   svg.setAttribute("width", width); svg.setAttribute("height", height);
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
 
+  const edgeKinds = { ca: lineStyle("ca"), fb: lineStyle("fb") };
+  const edgeColor = (type) => edgeKinds[type]?.color || (type === "ca" ? "var(--brand)" : "var(--info)");
   const defs = svgEl("defs", {});
-  [["ah-ca", "var(--brand)"], ["ah-fb", "var(--info)"]].forEach(([id, color]) => {
-    const mk = svgEl("marker", { id, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" });
-    mk.appendChild(svgEl("path", { d: "M0,0 L10,5 L0,10 z", fill: color }));
+  ["ca", "fb"].forEach((type) => {
+    const mk = svgEl("marker", { id: "ah-" + type, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 10, markerHeight: 10, markerUnits: "userSpaceOnUse", orient: "auto-start-reverse" });
+    mk.appendChild(applyStyle(svgEl("path", { d: "M0,0 L10,5 L0,10 z" }), { fill: edgeColor(type) }));
     defs.appendChild(mk);
   });
   svg.appendChild(defs);
+  ["ca", "fb"].forEach((type) => { // keep the legend in step with the diagram
+    const sw = $(type === "ca" ? "swatchCa" : "swatchFb"), ls = edgeKinds[type];
+    sw.style.borderTopColor = ls ? ls.color : "";
+    sw.style.borderTopStyle = ls ? (ls.css["stroke-dasharray"] === "none" ? "solid" : "dashed") : "";
+  });
 
+  // Node boxes: { x, y, w, h, cx } per id, centred in their grid cell.
   const pos = new Map();
   rows.forEach((row, ri) => {
     const rowW = row.length * W + (row.length - 1) * GAPX;
     const x0 = (width - rowW) / 2;
-    row.forEach((n, i) => pos.set(n.id, { x: x0 + i * (W + GAPX), y: PAD + ri * ROWH, n }));
+    row.forEach((n, i) => {
+      const { w, h } = sz[n.kind];
+      const x = x0 + i * (W + GAPX) + (W - w) / 2, y = PAD + ri * ROWH + (H - h) / 2;
+      pos.set(n.id, { x, y, w, h, cx: x + w / 2, ri, n });
+    });
   });
 
-  // Edges: group by unordered node pair so CA and FB between the same nodes fan out.
+  // Edges: control actions leave/enter on the left half, feedback on the right half.
   const edgeLayer = svgEl("g", {}), labelLayer = svgEl("g", {});
-  const pairCount = new Map();
+  const pairCount = new Map(), laneCount = { ca: 0, fb: 0 }, laneXs = [];
   const edges = [...cas.map((e) => ({ e, type: "ca", label: e.action })), ...fbs.map((e) => ({ e, type: "fb", label: e.signal }))];
   edges.forEach(({ e, type, label }) => {
     const a = pos.get(e.source), b = pos.get(e.target);
     if (!a || !b) return;
     const key = type + ":" + [e.source, e.target].join(">");
     const k = pairCount.get(key) || 0; pairCount.set(key, k + 1);
-    const off = (type === "ca" ? -1 : 1) * (22 + k * 16);
+    const off = (type === "ca" ? -1 : 1) * Math.min(22 + k * 16, Math.min(a.w, b.w) / 2 - 6);
     let x1, y1, x2, y2;
-    if (Math.abs(a.y - b.y) < 1) { // same row: horizontal
+    const flat = Math.abs((a.y + a.h / 2) - (b.y + b.h / 2)) < 1;
+    if (flat) { // same row: horizontal
       const dir = b.x > a.x ? 1 : -1, dy = (type === "ca" ? -10 : 10) - k * 8 * (type === "ca" ? 1 : -1);
-      x1 = a.x + (dir > 0 ? W : 0); x2 = b.x + (dir > 0 ? 0 : W); y1 = y2 = a.y + H / 2 + dy;
+      x1 = dir > 0 ? a.x + a.w : a.x; x2 = dir > 0 ? b.x : b.x + b.w; y1 = y2 = a.y + a.h / 2 + dy;
     } else {
       const down = b.y > a.y;
-      x1 = a.x + W / 2 + off; y1 = down ? a.y + H : a.y;
-      x2 = b.x + W / 2 + off; y2 = down ? b.y : b.y + H;
+      x1 = a.cx + off; y1 = down ? a.y + a.h : a.y;
+      x2 = b.cx + off; y2 = down ? b.y : b.y + b.h;
     }
-    const midY = (y1 + y2) / 2;
-    const d = Math.abs(y1 - y2) < 1 ? `M${x1},${y1} L${x2},${y2}` : `M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}`;
+    let midY = (y1 + y2) / 2, d, lane = null;
+    if (flat) d = `M${x1},${y1} L${x2},${y2}`;
+    else if (Math.abs(a.ri - b.ri) > 1) {
+      // Skips a row: run in a side lane (left for control, right for feedback) so it clears the nodes between.
+      const lo = Math.min(a.ri, b.ri), hi = Math.max(a.ri, b.ri);
+      const between = [...pos.values()].filter((p) => p.ri > lo && p.ri < hi);
+      const n = laneCount[type]++;
+      lane = type === "ca" ? Math.min(...between.map((p) => p.x), x1, x2) - 24 - n * 16 : Math.max(...between.map((p) => p.x + p.w), x1, x2) + 24 + n * 16;
+      laneXs.push(lane);
+      const s1 = y2 > y1 ? 1 : -1, bend = 36;
+      d = `M${x1},${y1} C${x1},${y1 + s1 * bend} ${lane},${y1 + s1 * bend} ${lane},${y1 + s1 * bend * 2} L${lane},${y2 - s1 * bend * 2} C${lane},${y2 - s1 * bend} ${x2},${y2 - s1 * bend} ${x2},${y2}`;
+    } else d = `M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}`;
     const path = svgEl("path", { d, class: type, "marker-end": `url(#ah-${type})` });
+    if (edgeKinds[type]) applyStyle(path, edgeKinds[type].css);
     path.appendChild(svgEl("title", {}, `${e.id}: ${label} (${e.source} → ${e.target})`));
     edgeLayer.appendChild(path);
-    const flat = Math.abs(y1 - y2) < 1;
-    const lx = flat ? (x1 + x2) / 2 : (x1 + x2) / 2 + (type === "ca" ? -6 : 6);
+    const lx = flat ? (x1 + x2) / 2 : (lane ?? (x1 + x2) / 2) + (type === "ca" ? -6 : 6);
     const ly = flat ? y1 + (type === "ca" ? -5 : 14) : midY + (type === "ca" ? -2 : 12) + k * 12;
-    labelLayer.appendChild(svgEl("text", { x: lx, y: ly, class: "lbl-" + type, "text-anchor": flat ? "middle" : (type === "ca" ? "end" : "start") }, trunc(label || e.id, 26)));
+    const lbl = svgEl("text", { x: lx, y: ly, class: "lbl-" + type, "text-anchor": flat ? "middle" : (type === "ca" ? "end" : "start") }, trunc(label || e.id, 26));
+    if (edgeKinds[type]) applyStyle(lbl, { fill: edgeKinds[type].color });
+    labelLayer.appendChild(lbl);
   });
 
+  // Group Identity Frame: system boundary drawn behind everything, labelled top-left.
+  if (frameStyle && pos.size) {
+    const boxes = [...pos.values()];
+    const fx = Math.min(...boxes.map((b) => b.x), ...laneXs) - 28, fy = Math.min(...boxes.map((b) => b.y)) - 40;
+    const fw = Math.max(...boxes.map((b) => b.x + b.w), ...laneXs) + 28 - fx, fh = Math.max(...boxes.map((b) => b.y + b.h)) + 24 - fy;
+    const g = svgEl("g", { class: "frame" });
+    g.appendChild(applyStyle(svgEl("rect", { x: fx, y: fy, width: fw, height: fh, rx: clamp(frameStyle.radius, 0, 40, 8) }),
+      { fill: "var(--bg-sunken)", stroke: "var(--fg)", "stroke-width": 1, ...boxCss(frameStyle) }));
+    g.appendChild(applyStyle(svgEl("text", { x: fx + 12, y: fy + 20 }, trunc(m.system || "System", 60)), { "font-weight": 600, ...fontCss(frameStyle) }));
+    svg.insertBefore(g, defs.nextSibling); // behind edges and nodes
+  }
+
   const nodeLayer = svgEl("g", {});
-  pos.forEach(({ x, y, n }) => {
+  pos.forEach(({ x, y, w, h, n }) => {
+    const st = nodeStyle[n.kind];
     const g = svgEl("g", { class: "node " + n.kind, transform: `translate(${x},${y})` });
-    g.appendChild(svgEl("rect", { width: W, height: H, rx: n.kind === "ctrl" ? 6 : 2 }));
-    g.appendChild(svgEl("text", { x: W / 2, y: 23, "text-anchor": "middle", "font-weight": 600 }, trunc(n.name || n.id, 26)));
+    g.appendChild(applyStyle(svgEl("rect", { width: w, height: h, rx: clamp(st && st.radius, 0, 40, n.kind === "ctrl" ? 6 : 2) }), boxCss(st)));
+    const chars = Math.max(10, Math.floor(w / 7));
+    g.appendChild(applyStyle(svgEl("text", { x: w / 2, y: h / 2 - 5, "text-anchor": "middle", "font-weight": 600 }, trunc(n.name || n.id, chars)), fontCss(st)));
     const sub = n.kind === "ctrl"
       ? `${n.id} · ${(n.process_model?.variables || []).length} PM vars`
       : `${n.id} · ${(n.states || []).length} states`;
-    g.appendChild(svgEl("text", { x: W / 2, y: 41, "text-anchor": "middle", class: "sub" }, sub));
+    const subCss = fontCss(st, 0.85); delete subCss.fill; delete subCss["font-weight"];
+    g.appendChild(applyStyle(svgEl("text", { x: w / 2, y: h / 2 + 13, "text-anchor": "middle", class: "sub" }, sub), subCss));
     g.appendChild(svgEl("title", {}, n.kind === "ctrl"
       ? `${n.name}\nVariables: ${(n.process_model?.variables || []).join(", ")}\nAssumptions: ${(n.process_model?.assumptions || []).join("; ")}`
       : `${n.name}\nStates: ${(n.states || []).join(", ")}`));
@@ -608,6 +722,7 @@ const DEFAULTS = {
   gemini_model: "gemini-2.5-pro",
   local_endpoint: "http://localhost:11434/v1/chat/completions",
   local_model: "llama3.1",
+  penpot_url: "http://127.0.0.1:4410/mcp",
 };
 
 async function readJson(res) {
@@ -1050,15 +1165,16 @@ $("saveLogBtn").addEventListener("click", () => {
 
 /* ── Settings ──────────────────────────────────────────────────────────── */
 const SETTING_FIELDS = ["provider", "claude_key", "claude_model", "claude_effort", "claude_fallbacks", "gemini_key", "gemini_model",
-  "local_endpoint", "local_model", "local_key", "mcp_enabled", "mcp_sse_url", "system_prompt", "remember_keys"];
-const SECRET_FIELDS = ["claude_key", "gemini_key", "local_key"];
+  "local_endpoint", "local_model", "local_key", "mcp_enabled", "mcp_sse_url", "penpot_url", "penpot_interval", "system_prompt", "remember_keys"];
+const SECRET_FIELDS = ["claude_key", "gemini_key", "local_key", "penpot_url"]; // a direct Penpot MCP URL carries the user token
 let settings = {};
 
 function loadSettings() {
   const saved = store.get("settings", {});
   settings = { provider: "claude", claude_model: DEFAULTS.claude_model, claude_effort: "medium", claude_fallbacks: true,
     gemini_model: DEFAULTS.gemini_model, local_endpoint: DEFAULTS.local_endpoint, local_model: DEFAULTS.local_model,
-    mcp_enabled: true, system_prompt: DEFAULT_SYSTEM_PROMPT, remember_keys: true, ...saved };
+    mcp_enabled: true, penpot_url: DEFAULTS.penpot_url, penpot_interval: 3,
+    system_prompt: DEFAULT_SYSTEM_PROMPT, remember_keys: true, ...saved };
   SETTING_FIELDS.forEach((k) => {
     const el = $(k); if (!el) return;
     if (el.type === "checkbox") el.checked = !!settings[k]; else el.value = settings[k] ?? "";
@@ -1095,12 +1211,230 @@ $("themeBtn").addEventListener("click", () => {
   store.set("theme", document.documentElement.dataset.theme);
 });
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   7. Penpot live link
+   While "Follow Penpot selection" is on, the page polls the Penpot MCP server
+   (Streamable HTTP transport, the same endpoint Claude Code uses) and runs
+   PENPOT_SELECTION_CODE through its execute_code tool. That code reads
+   penpot.selection, finds the STPA components inside it by layer or component
+   name, and returns their fills, strokes, radii, sizes and fonts. The diagram is
+   re-rendered only when that style changes. The last style is kept in
+   localStorage so a reload looks the same before Penpot answers again.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Minimal MCP Streamable HTTP client: one POST per JSON-RPC message; replies come back
+    as application/json or as a short text/event-stream. Keeps Mcp-Session-Id. */
+class McpHttpClient {
+  constructor(url) { this.url = url; this.sessionId = null; this.protocolVersion = null; this.nextId = 1; this.tools = []; }
+  async send(message) {
+    const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
+    if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
+    if (this.protocolVersion) headers["mcp-protocol-version"] = this.protocolVersion;
+    const res = await fetch(this.url, { method: "POST", headers, body: JSON.stringify(message) });
+    const sid = res.headers.get("mcp-session-id");
+    if (sid) this.sessionId = sid;
+    return res;
+  }
+  async request(method, params) {
+    const id = this.nextId++;
+    const res = await this.send({ jsonrpc: "2.0", id, method, params });
+    if (!res.ok) throw new Error(`HTTP ${res.status}${res.status === 404 ? " (MCP session expired)" : ""}: ${(await res.text()).slice(0, 200)}`);
+    let msg;
+    if ((res.headers.get("content-type") || "").includes("text/event-stream")) {
+      for (const block of (await res.text()).split(/\r?\n\r?\n/)) {
+        const data = block.split(/\r?\n/).filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
+        if (!data) continue;
+        try { const m = JSON.parse(data); if (m.id === id) { msg = m; break; } } catch { /* not JSON */ }
+      }
+      if (!msg) throw new Error(`No reply to ${method} in the event stream`);
+    } else msg = await res.json();
+    if (msg.error) throw new Error(msg.error.message || JSON.stringify(msg.error));
+    return msg.result;
+  }
+  async notify(method, params) { await this.send({ jsonrpc: "2.0", method, ...(params ? { params } : {}) }); }
+  async connect() {
+    const init = await this.request("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "hfa-stpa-workbench", version: "1.1.0" } });
+    this.protocolVersion = init.protocolVersion || null;
+    await this.notify("notifications/initialized");
+    this.tools = (await this.request("tools/list", {})).tools || [];
+    return this.tools;
+  }
+}
+
+/* Runs inside Penpot (plugin API). Kept ES5-style to match scripts/penpot in hfa-ds. */
+const PENPOT_SELECTION_CODE = `(function () {
+  var sel = penpot.selection || [];
+  var out = {
+    file: penpot.currentFile && penpot.currentFile.name,
+    page: penpot.currentPage && penpot.currentPage.name,
+    selection: sel.slice(0, 10).map(function (s) { return { id: s.id, name: s.name, type: s.type }; }),
+    roles: {}, fallback: null
+  };
+  if (!sel.length) return out;
+  var ROLES = [
+    ["frame", /group identity frame|identity frame|system boundary/i],
+    ["fb", /connector feedback|feedback connector/i],
+    ["ca", /connector control|control connector/i],
+    ["proc", /controlled process/i],
+    ["ctrl", /\\bcontroller\\b/i]
+  ];
+  var budget = 800;
+  function compName(s) { try { var c = s.component && s.component(); return c ? c.name : ""; } catch (e) { return ""; } }
+  function roleOf(s) {
+    var n = (s.name || "") + " " + compName(s);
+    for (var i = 0; i < ROLES.length; i++) if (ROLES[i][1].test(n)) return ROLES[i][0];
+    return null;
+  }
+  function kids(s) { try { return Array.isArray(s.children) ? s.children : []; } catch (e) { return []; } }
+  function walk(s, depth, visit) {
+    if (budget-- <= 0 || visit(s, depth) === false || depth >= 8) return;
+    kids(s).forEach(function (c) { walk(c, depth + 1, visit); });
+  }
+  function first(root, pred) {
+    var hit = null;
+    walk(root, 0, function (s) { if (hit) return false; if (pred(s)) { hit = s; return false; } });
+    return hit;
+  }
+  function fillOf(s) {
+    var f = Array.isArray(s.fills) ? s.fills.filter(function (x) { return x && x.fillColor; })[0] : null;
+    return f ? { color: f.fillColor, opacity: f.fillOpacity == null ? 1 : f.fillOpacity } : null;
+  }
+  function strokeOf(s) {
+    var k = Array.isArray(s.strokes) ? s.strokes.filter(function (x) { return x && x.strokeColor && x.strokeStyle !== "none"; })[0] : null;
+    return k ? { color: k.strokeColor, opacity: k.strokeOpacity == null ? 1 : k.strokeOpacity, width: k.strokeWidth, style: k.strokeStyle || "solid" } : null;
+  }
+  function radiusOf(s) {
+    if (typeof s.borderRadius === "number") return s.borderRadius;
+    return typeof s.borderRadiusTopLeft === "number" ? s.borderRadiusTopLeft : null;
+  }
+  function describe(s) {
+    var box = (fillOf(s) || strokeOf(s)) ? s : first(s, function (x) { return x.type !== "text" && (fillOf(x) || strokeOf(x)); });
+    var line = first(s, function (x) { return x.type !== "text" && strokeOf(x) && (x.type === "path" || !fillOf(x)); });
+    var text = first(s, function (x) { return x.type === "text"; });
+    var tf = text && fillOf(text);
+    return {
+      name: s.name, type: s.type, width: Math.round(s.width), height: Math.round(s.height),
+      fill: box ? fillOf(box) : null, stroke: box ? strokeOf(box) : null, radius: box ? radiusOf(box) : null,
+      line: line ? strokeOf(line) : null,
+      font: text ? { family: text.fontFamily, size: Number(text.fontSize) || null, weight: String(text.fontWeight || ""), color: tf ? tf.color : null } : null
+    };
+  }
+  sel.forEach(function (root) {
+    walk(root, 0, function (s) {
+      var r = roleOf(s);
+      if (!r) return;
+      if (!out.roles[r]) out.roles[r] = describe(s);
+      if (r !== "frame") return false;   // a frame may contain the other components
+    });
+  });
+  out.fallback = describe(sel[0]);
+  return out;
+})()`;
+
+const ROLE_NAMES = { ctrl: "Controller", proc: "Controlled Process", ca: "Connector Control", fb: "Connector Feedback", frame: "Group Identity Frame" };
+const penpotLink = { client: null, style: store.get("penpotStyle"), timer: null, busy: false, lastKey: "", returnMode: null };
+
+function setPenpotState(text, isError) {
+  const el = $("penpotState");
+  el.textContent = "Penpot: " + text;
+  el.classList.toggle("err", !!isError);
+  el.title = text;
+}
+
+/** Pull the JSON value out of an execute_code result, whatever wrapper the server adds. */
+function parseToolJson(result) {
+  const text = (result.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+  if (result.isError) throw new Error(text.slice(0, 300) || "execute_code failed");
+  let v = result.structuredContent ?? null;
+  if (v === null) {
+    try { v = JSON.parse(text); }
+    catch { const a = text.indexOf("{"), b = text.lastIndexOf("}"); if (a >= 0 && b > a) try { v = JSON.parse(text.slice(a, b + 1)); } catch { /* fall through */ } }
+  }
+  if (typeof v === "string") { try { v = JSON.parse(v); } catch { /* keep string */ } }
+  if (v && typeof v === "object" && !("selection" in v) && "result" in v) v = typeof v.result === "string" ? JSON.parse(v.result) : v.result;
+  if (!v || typeof v !== "object") throw new Error("Unexpected execute_code output: " + text.slice(0, 200));
+  return v;
+}
+
+/** Run code through execute_code. Servers differ on whether code runs as a function body
+    (needs "return") or as an expression, so try "return …" once and remember what works. */
+async function runPenpotCode(src) {
+  const client = penpotLink.client;
+  const tool = client.tools.find((t) => /execute_code/.test(t.name));
+  if (!tool) throw new Error("this MCP server has no execute_code tool");
+  const arg = (tool.inputSchema?.required || [])[0] || "code";
+  const call = async (code) => parseToolJson(await client.request("tools/call", { name: tool.name, arguments: { [arg]: code } }));
+  if (penpotLink.returnMode !== "bare") {
+    try { const v = await call("return " + src); penpotLink.returnMode = "return"; return v; }
+    catch (e) { if (penpotLink.returnMode === "return" || !/return|unexpected/i.test(e.message)) throw e; }
+  }
+  const v = await call(src);
+  penpotLink.returnMode = "bare";
+  return v;
+}
+
+async function penpotPoll() {
+  if (penpotLink.busy || document.hidden) return;
+  penpotLink.busy = true;
+  try {
+    if (!penpotLink.client) {
+      setPenpotState("connecting…");
+      const client = new McpHttpClient(settings.penpot_url || DEFAULTS.penpot_url);
+      await client.connect();
+      penpotLink.client = client;
+    }
+    const data = await runPenpotCode(PENPOT_SELECTION_CODE);
+    if (!data.selection || !data.selection.length) {
+      setPenpotState(penpotLink.style ? `nothing selected · keeping “${trunc(penpotLink.style.label, 30)}”` : "select an object in Penpot");
+      return;
+    }
+    const style = { roles: data.roles || {}, fallback: data.fallback || null, label: data.selection.map((s) => s.name).join(", "), page: data.page || "", file: data.file || "" };
+    const key = JSON.stringify(style);
+    if (key !== penpotLink.lastKey) {
+      penpotLink.lastKey = key;
+      penpotLink.style = style;
+      store.set("penpotStyle", style);
+      if (currentModel) renderDiagram(currentModel);
+    }
+    const matched = Object.keys(style.roles).map((r) => ROLE_NAMES[r] || r);
+    setPenpotState(`following “${trunc(style.label, 30)}” · ${matched.length ? matched.join(", ") : "its style for all nodes"}`);
+  } catch (e) {
+    penpotLink.client = null; // reconnect on the next tick
+    setPenpotState(e instanceof TypeError
+      ? "cannot reach " + (settings.penpot_url || DEFAULTS.penpot_url) + " (is penpot-relay.mjs running?)"
+      : e.message, true);
+  } finally {
+    penpotLink.busy = false;
+  }
+}
+
+function penpotFollow(on) {
+  clearInterval(penpotLink.timer); penpotLink.timer = null;
+  $("penpotFollow").setAttribute("aria-pressed", String(on));
+  store.set("penpotFollow", on);
+  if (!on) { setPenpotState(penpotLink.style ? `off · last style “${trunc(penpotLink.style.label, 30)}”` : "off"); return; }
+  penpotPoll();
+  penpotLink.timer = setInterval(penpotPoll, clamp(settings.penpot_interval, 1, 60, 3) * 1000);
+}
+function penpotRestart() { penpotLink.client = null; penpotLink.returnMode = null; if (penpotLink.timer) penpotFollow(true); }
+
+$("penpotFollow").addEventListener("click", () => penpotFollow(!penpotLink.timer));
+$("penpotReset").addEventListener("click", () => {
+  penpotFollow(false);
+  penpotLink.style = null; penpotLink.lastKey = ""; store.del("penpotStyle");
+  setPenpotState("off");
+  if (currentModel) renderDiagram(currentModel);
+});
+["penpot_url", "penpot_interval"].forEach((k) => $(k).addEventListener("change", penpotRestart));
+document.addEventListener("visibilitychange", () => { if (!document.hidden && penpotLink.timer) penpotPoll(); });
+
 /* ── Boot ─────────────────────────────────────────────────────────────── */
 (function boot() {
   const theme = store.get("theme"); if (theme) document.documentElement.dataset.theme = theme;
   loadSettings();
   renderQuick();
   setEditor(store.get("structure") || PRESETS["Autonomous Emergency Braking (AEB)"]);
+  penpotFollow(!!store.get("penpotFollow"));
   addMessage("assistant", "Edit the control structure on the left (or load a preset), pick a provider in **Settings**, then use a quick action or ask a question. The current structure is sent with every request.");
 })();
 </script>
