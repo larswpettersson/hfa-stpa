@@ -8,7 +8,7 @@ Open `index.html` in a browser. It works from `file://` or any static server (fo
 
 ## What it does
 
-- **Editor (left):** a JSON editor for the control structure. It loads presets (AEB, railway level crossing, insulin pump), validates live and draws a layered SVG diagram. Control actions point down; feedback points up as dashed lines.
+- **Editor (left):** a JSON editor for the control structure. It loads presets (AEB, railway level crossing, insulin pump), validates live and draws a layered SVG diagram. Control actions point down; feedback points up as dashed lines. Lines are horizontal or vertical only: each controller pair gets a channel with the control line on the left and the feedback line beside it, and boxes widen so those channels run straight (as in the Penpot UC759 example). Labels move along their line to avoid boxes, other labels and other lines wherever there is room.
   - Validation catches duplicate ids, dangling `source`/`target` references, feedback that doesn't point to a controller, open control loops (a control action with no feedback path back) and controllers without process-model variables.
 - **Analysis (right):** a chat with the selected model. Every request includes the STPA system prompt and the current structure. Quick actions:
   - Identify UCAs

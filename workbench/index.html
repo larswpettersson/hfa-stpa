@@ -477,6 +477,14 @@ function svgEl(tag, attrs, text) {
   return el;
 }
 const trunc = (s, n) => (s = String(s ?? "")).length > n ? s.slice(0, n - 1) + "…" : s;
+/* Width of a label in px, measured with the page font (or the linked Penpot font). */
+const measureCtx = document.createElement("canvas").getContext("2d");
+function textWidth(s, px, weight = 400, st) {
+  const base = getComputedStyle(document.documentElement).getPropertyValue("--font").trim() || "sans-serif";
+  const fam = st?.font?.family && st.font.family !== "mixed" ? `"${st.font.family}", ${base}` : base;
+  measureCtx.font = `${weight} ${px}px ${fam}`;
+  return measureCtx.measureText(String(s ?? "")).width;
+}
 
 /* Style of one diagram element kind ("ctrl" | "proc" | "ca" | "fb" | "frame") taken from the
    linked Penpot selection (section 7); null means "use the theme default". When the selection
@@ -546,17 +554,14 @@ function renderDiagram(m) {
   const rows = levels.map((lv) => ctrls.filter((c) => rank.get(c.id) === lv).map((c) => ({ ...c, kind: "ctrl" })));
   if (procs.length) rows.push(procs.map((p) => ({ ...p, kind: "proc" })));
 
-  // Node sizes follow the Penpot components when linked; the grid cell fits the largest.
+  // Node sizes follow the Penpot components when linked (as a minimum; nodes grow to fit text and channels).
   const nodeStyle = { ctrl: penpotStyleFor("ctrl"), proc: penpotStyleFor("proc") };
-  const size = (st) => ({ w: clamp(st && st.width, 100, 320, 180), h: clamp(st && st.height, 36, 140, 56) });
+  const size = (st) => ({ w: clamp(st && st.width, 100, 320, 140), h: clamp(st && st.height, 36, 140, 56) });
   const sz = { ctrl: size(nodeStyle.ctrl), proc: size(nodeStyle.proc) };
-  const W = Math.max(sz.ctrl.w, sz.proc.w), H = Math.max(sz.ctrl.h, sz.proc.h);
+  const H = Math.max(sz.ctrl.h, sz.proc.h);
   const frameStyle = penpotStyleFor("frame");
-  const GAPX = 60, ROWH = H + 114, PAD = frameStyle ? 56 : 30;
-  const width = Math.max(560, Math.max(1, ...rows.map((r) => r.length)) * (W + GAPX) + PAD * 2);
-  const height = rows.length * ROWH - (ROWH - H) + PAD * 2;
-  svg.setAttribute("width", width); svg.setAttribute("height", height);
-  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  const PAD = 30;
+  const LANE = 22, CHGAP = 40, EDGE_PAD = 18, GAPX = 48, LINE_H = 13, LBL_MAX = 40;
 
   const edgeKinds = { ca: lineStyle("ca"), fb: lineStyle("fb") };
   const edgeColor = (type) => edgeKinds[type]?.color || (type === "ca" ? "var(--brand)" : "var(--info)");
@@ -573,91 +578,237 @@ function renderDiagram(m) {
     sw.style.borderTopStyle = ls ? (ls.css["stroke-dasharray"] === "none" ? "solid" : "dashed") : "";
   });
 
-  // Node boxes: { x, y, w, h, cx } per id, centred in their grid cell.
-  const pos = new Map();
-  rows.forEach((row, ri) => {
-    const rowW = row.length * W + (row.length - 1) * GAPX;
-    const x0 = (width - rowW) / 2;
-    row.forEach((n, i) => {
-      const { w, h } = sz[n.kind];
-      const x = x0 + i * (W + GAPX) + (W - w) / 2, y = PAD + ri * ROWH + (H - h) / 2;
-      pos.set(n.id, { x, y, w, h, cx: x + w / 2, ri, n });
+  const subOf = (n) => n.kind === "ctrl" ? `${n.id} · ${(n.process_model?.variables || []).length} PM vars` : `${n.id} · ${(n.states || []).length} states`;
+  const lblW = (s) => textWidth(s, 11);
+
+  // Nodes, one per controller / process, with the channels that leave their bottom and enter their top.
+  const nodes = new Map();
+  rows.forEach((row, r) => row.forEach((n, i) => {
+    const st = nodeStyle[n.kind], fpx = st?.font?.size ? clamp(st.font.size, 8, 22, 12) : 12;
+    const minW = Math.min(420, Math.max(sz[n.kind].w, textWidth(n.name || n.id, fpx, 600, st) + 28, textWidth(subOf(n), fpx * 0.875, 400, st) + 28));
+    nodes.set(n.id, { n, kind: n.kind, r, order: (i + 0.5) / row.length, h: sz[n.kind].h, minW, x: 0, y: 0, w: minW, top: [], bottom: [] });
+  }));
+
+  // Edges with the same type, source and target share one line and stack their labels.
+  const groups = new Map();
+  [...cas.map((e) => ({ e, type: "ca", label: e.action })), ...fbs.map((e) => ({ e, type: "fb", label: e.signal }))].forEach(({ e, type, label }) => {
+    const a = nodes.get(e.source), b = nodes.get(e.target);
+    if (!a || !b || a === b) return;
+    const key = type + "|" + e.source + "|" + e.target;
+    if (!groups.has(key)) groups.set(key, { type, a, b, edges: [] });
+    groups.get(key).edges.push({ e, label: trunc(label || e.id, LBL_MAX) });
+  });
+  // Groups between two rows form a channel: control lines on the left, feedback lines on the right,
+  // like the paired connectors in the Penpot control-structure examples.
+  const channels = new Map(), flatGroups = [];
+  groups.forEach((g) => {
+    if (g.a.r === g.b.r) { flatGroups.push(g); return; }
+    const [u, l] = g.a.r < g.b.r ? [g.a, g.b] : [g.b, g.a];
+    const key = u.n.id + "|" + l.n.id;
+    if (!channels.has(key)) { const ch = { u, l, groups: [] }; channels.set(key, ch); u.bottom.push(ch); l.top.push(ch); }
+    channels.get(key).groups.push(g);
+  });
+  channels.forEach((ch) => {
+    ch.groups.sort((p, q) => (p.type === q.type ? 0 : p.type === "ca" ? -1 : 1));
+    ch.span = (ch.groups.length - 1) * LANE;
+  });
+
+  // Order each row by the mean position of the nodes above it (barycentre), so channels run straight down.
+  rows.forEach((row, r) => {
+    if (!r) return;
+    const key = (n) => { const nd = nodes.get(n.id), ups = nd.top.map((ch) => ch.u.order); return ups.length ? ups.reduce((s, v) => s + v, 0) / ups.length : nd.order; };
+    row.sort((p, q) => key(p) - key(q));
+    row.forEach((n, i) => { nodes.get(n.id).order = (i + 0.5) / row.length; });
+  });
+  // Bottom channels follow the order of their lower nodes; channels that skip a row start on the outer side.
+  channels.forEach((ch) => { ch.pre = 0; ch.side = ch.u.order < 0.5 ? -1 : 2; });
+  const bottomNeed = (nd) => nd.bottom.length ? nd.bottom.reduce((s, ch) => s + ch.pre + ch.span, 0) + (nd.bottom.length - 1) * CHGAP + 2 * EDGE_PAD : 0;
+  // Same-row neighbours get a gap wide enough for the labels of the lines between them.
+  const gapBetween = (p, q) => Math.max(GAPX, ...flatGroups.filter((g) => (g.a === p && g.b === q) || (g.a === q && g.b === p))
+    .flatMap((g) => g.edges.map((x) => lblW(x.label) + 28)));
+
+  // Place rows top-down. A node starts at the leftmost channel coming from above and is widened to cover
+  // all of them, so those lines need no elbow; a node pushed right by its neighbour would need elbows.
+  const place = () => rows.forEach((row, r) => {
+    let prev = null;
+    const rowStart = r ? Math.min(...rows[r - 1].map((n) => nodes.get(n.id).x)) : 0;
+    row.forEach((n) => {
+      const nd = nodes.get(n.id);
+      const k = (ch) => ch.l.r - nd.r > 1 ? ch.side : ch.l.order;
+      nd.bottom.sort((p, q) => k(p) - k(q));
+      const xs = nd.top.flatMap((ch) => [ch.x, ch.x + ch.span]);
+      const minX = prev ? prev.x + prev.w + gapBetween(prev, nd) : -Infinity;
+      nd.x = Math.max(xs.length ? Math.min(...xs) - EDGE_PAD : (prev ? minX : rowStart), minX);
+      const hi = xs.length ? Math.max(...xs) + EDGE_PAD : -Infinity;
+      nd.w = Math.max(nd.minW, bottomNeed(nd), hi - nd.x);
+      let cx = nd.x + (nd.w - bottomNeed(nd)) / 2 + EDGE_PAD;
+      nd.bottom.forEach((ch) => { cx += ch.pre; ch.x = cx; cx += ch.span + CHGAP; });
+      prev = nd;
     });
   });
+  const blockedBy = (ch) => [...nodes.values()].some((nd) => nd.r > ch.u.r && nd.r < ch.l.r && ch.x + ch.span > nd.x - 8 && ch.x < nd.x + nd.w + 8);
+  // Relax: shift a channel right (widening its upper node) until its pushed-right lower node lies under it,
+  // and move a row-skipping channel to the other side of its upper node when a node in between blocks it.
+  for (let pass = 0; pass < 8; pass++) {
+    place();
+    let changed = false;
+    channels.forEach((ch) => {
+      if (ch.l.r - ch.u.r > 1) {
+        if (blockedBy(ch) && !ch.flipped) { ch.side = ch.side < 0 ? 2 : -1; ch.flipped = changed = true; }
+      } else if (ch.x < ch.l.x + 8) { ch.pre += ch.l.x + EDGE_PAD - ch.x; changed = true; }
+    });
+    if (!changed) break;
+  }
+  place();
 
-  // Edges: control actions leave/enter on the left half, feedback on the right half.
-  const edgeLayer = svgEl("g", {}), labelLayer = svgEl("g", {});
-  const pairCount = new Map(), laneCount = { ca: 0, fb: 0 }, laneXs = [];
-  const edges = [...cas.map((e) => ({ e, type: "ca", label: e.action })), ...fbs.map((e) => ({ e, type: "fb", label: e.signal }))];
-  edges.forEach(({ e, type, label }) => {
-    const a = pos.get(e.source), b = pos.get(e.target);
-    if (!a || !b) return;
-    const key = type + ":" + [e.source, e.target].join(">");
-    const k = pairCount.get(key) || 0; pairCount.set(key, k + 1);
-    const off = (type === "ca" ? -1 : 1) * Math.min(22 + k * 16, Math.min(a.w, b.w) / 2 - 6);
-    let x1, y1, x2, y2;
-    const flat = Math.abs((a.y + a.h / 2) - (b.y + b.h / 2)) < 1;
-    if (flat) { // same row: horizontal
-      const dir = b.x > a.x ? 1 : -1, dy = (type === "ca" ? -10 : 10) - k * 8 * (type === "ca" ? 1 : -1);
-      x1 = dir > 0 ? a.x + a.w : a.x; x2 = dir > 0 ? b.x : b.x + b.w; y1 = y2 = a.y + a.h / 2 + dy;
-    } else {
-      const down = b.y > a.y;
-      x1 = a.cx + off; y1 = down ? a.y + a.h : a.y;
-      x2 = b.cx + off; y2 = down ? b.y : b.y + b.h;
+  // Row height leaves room for the stacked labels of the busiest channel.
+  const maxStack = Math.max(1, ...[...groups.values()].map((g) => g.edges.length));
+  const ROWGAP = Math.min(240, Math.max(110, 60 + maxStack * LINE_H * 2));
+  nodes.forEach((nd) => { nd.y = nd.r * (H + ROWGAP) + (H - nd.h) / 2; });
+
+  // Orthogonal routes: straight where the channel lies inside both nodes, otherwise elbows in the gap
+  // just above the lower node; a channel that would cross a node in a skipped row runs in a side lane.
+  const routes = [];
+  const gapCount = new Map(), laneCount = { L: 0, R: 0 };
+  const bump = (k) => { const v = gapCount.get(k) || 0; gapCount.set(k, v + 1); return v; };
+  channels.forEach((ch) => {
+    const { u, l } = ch, yU = u.y + u.h, yL = l.y;
+    const between = [...nodes.values()].filter((nd) => nd.r > u.r && nd.r < l.r);
+    const tx0 = ch.x >= l.x + 8 && ch.x + ch.span <= l.x + l.w - 8 ? ch.x
+      : ch.x < l.x + 8 ? l.x + EDGE_PAD : l.x + l.w - EDGE_PAD - ch.span;
+    const blocked = between.some((nd) => ch.x + ch.span > nd.x - 8 && ch.x < nd.x + nd.w + 8);
+    let lane = null;
+    if (blocked) {
+      const lo = Math.min(...between.map((nd) => nd.x)), hi = Math.max(...between.map((nd) => nd.x + nd.w));
+      lane = ch.x - lo < hi - ch.x ? lo - 24 - laneCount.L++ * (ch.span + LANE * 2) - ch.span : hi + 24 + laneCount.R++ * (ch.span + LANE * 2);
     }
-    let midY = (y1 + y2) / 2, d, lane = null;
-    if (flat) d = `M${x1},${y1} L${x2},${y2}`;
-    else if (Math.abs(a.ri - b.ri) > 1) {
-      // Skips a row: run in a side lane (left for control, right for feedback) so it clears the nodes between.
-      const lo = Math.min(a.ri, b.ri), hi = Math.max(a.ri, b.ri);
-      const between = [...pos.values()].filter((p) => p.ri > lo && p.ri < hi);
-      const n = laneCount[type]++;
-      lane = type === "ca" ? Math.min(...between.map((p) => p.x), x1, x2) - 24 - n * 16 : Math.max(...between.map((p) => p.x + p.w), x1, x2) + 24 + n * 16;
-      laneXs.push(lane);
-      const s1 = y2 > y1 ? 1 : -1, bend = 36;
-      d = `M${x1},${y1} C${x1},${y1 + s1 * bend} ${lane},${y1 + s1 * bend} ${lane},${y1 + s1 * bend * 2} L${lane},${y2 - s1 * bend * 2} C${lane},${y2 - s1 * bend} ${x2},${y2 - s1 * bend} ${x2},${y2}`;
-    } else d = `M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}`;
-    const path = svgEl("path", { d, class: type, "marker-end": `url(#ah-${type})` });
-    if (edgeKinds[type]) applyStyle(path, edgeKinds[type].css);
-    path.appendChild(svgEl("title", {}, `${e.id}: ${label} (${e.source} → ${e.target})`));
-    edgeLayer.appendChild(path);
-    const lx = flat ? (x1 + x2) / 2 : (lane ?? (x1 + x2) / 2) + (type === "ca" ? -6 : 6);
-    const ly = flat ? y1 + (type === "ca" ? -5 : 14) : midY + (type === "ca" ? -2 : 12) + k * 12;
-    const lbl = svgEl("text", { x: lx, y: ly, class: "lbl-" + type, "text-anchor": flat ? "middle" : (type === "ca" ? "end" : "start") }, trunc(label || e.id, 26));
-    if (edgeKinds[type]) applyStyle(lbl, { fill: edgeKinds[type].color });
-    labelLayer.appendChild(lbl);
+    const eTop = blocked ? yU + 16 + bump("t" + u.r) * 8 : null;
+    const eBot = (blocked || tx0 !== ch.x) ? yL - 16 - bump("b" + l.r) * 8 : null;
+    ch.groups.forEach((g, i) => {
+      const x = ch.x + i * LANE, tx = tx0 + i * LANE, o = i * 4;
+      let pts;
+      if (blocked) pts = [[x, yU], [x, eTop + o], [lane + i * LANE, eTop + o], [lane + i * LANE, eBot - o], [tx, eBot - o], [tx, yL]];
+      else if (tx !== x) pts = [[x, yU], [x, eBot - o], [tx, eBot - o], [tx, yL]];
+      else pts = [[x, yU], [x, yL]];
+      routes.push({ g, pts: g.a === u ? pts : pts.reverse() });
+    });
+  });
+  const flatCount = new Map();
+  flatGroups.forEach((g) => {
+    const { a, b } = g, dir = b.x > a.x ? 1 : -1;
+    const lo = Math.min(a.x, b.x), hi = Math.max(a.x, b.x);
+    const adjacent = ![...nodes.values()].some((nd) => nd.r === a.r && nd !== a && nd !== b && nd.x > lo && nd.x < hi);
+    const pairKey = [a.n.id, b.n.id].sort().join("|") + g.type;
+    const i = flatCount.get(pairKey) || 0; flatCount.set(pairKey, i + 1);
+    let pts;
+    if (adjacent) {
+      const y = a.y + a.h / 2 + (g.type === "ca" ? -8 - i * 10 : 8 + i * 10);
+      pts = [[dir > 0 ? a.x + a.w : a.x, y], [dir > 0 ? b.x : b.x + b.w, y]];
+    } else { // over the top of the nodes in between
+      const k = bump("f" + a.r), yt = Math.min(a.y, b.y) - 18 - k * 8, off = g.type === "ca" ? -EDGE_PAD : EDGE_PAD;
+      const x1 = a.x + a.w / 2 + off, x2 = b.x + b.w / 2 + off;
+      pts = [[x1, a.y], [x1, yt], [x2, yt], [x2, b.y]];
+    }
+    routes.push({ g, pts, flat: true });
   });
 
+  // Labels: beside the longest vertical run (control on the left, feedback on the right), or above/below a
+  // horizontal line. Each label takes the first spot that hits no node, label or other line.
+  const rect = (x, y, w, h) => ({ x, y, w, h });
+  const overlaps = (p, list) => list.some((o) => p.x < o.x + o.w && p.x + p.w > o.x && p.y < o.y + o.h && p.y + p.h > o.y);
+  const nodeRects = [...nodes.values()].map((nd) => rect(nd.x - 2, nd.y - 2, nd.w + 4, nd.h + 4));
+  const lineRects = routes.flatMap((rt, ri) => rt.pts.slice(1).map((p, i) => {
+    const q = rt.pts[i];
+    return { ...rect(Math.min(p[0], q[0]) - 2, Math.min(p[1], q[1]) - 2, Math.abs(p[0] - q[0]) + 4, Math.abs(p[1] - q[1]) + 4), ri };
+  }));
+  const placed = [], labels = [];
+  const runOf = (pts) => {
+    let best = null;
+    pts.slice(1).forEach((p, i) => {
+      const q = pts[i], len = Math.abs(p[1] - q[1]);
+      if (p[0] === q[0] && (!best || len > best.len)) best = { x: p[0], y1: Math.min(p[1], q[1]), y2: Math.max(p[1], q[1]), len };
+    });
+    return best;
+  };
+  routes.map((rt, ri) => ({ rt, ri, run: rt.flat ? null : runOf(rt.pts) }))
+    .sort((p, q) => (p.run ? p.run.len : 0) - (q.run ? q.run.len : 0))
+    .forEach(({ rt, ri, run }) => {
+      const type = rt.g.type, others = lineRects.filter((lr) => lr.ri !== ri);
+      rt.g.edges.forEach(({ e, label }) => {
+        const w = lblW(label), h = LINE_H;
+        const cands = [];
+        if (run) {
+          const mid = (run.y1 + run.y2) / 2, sides = type === "ca" ? [-1, 1] : [1, -1];
+          for (const side of sides) for (let s = 0; s * LINE_H < run.len / 2; s++) for (const sg of s ? [1, -1] : [1]) {
+            const by = mid + 4 + sg * s * LINE_H;
+            if (by - h < run.y1 + 2 || by > run.y2 - 2) continue;
+            cands.push(rect(side < 0 ? run.x - 6 - w : run.x + 6, by - h + 3, w, h));
+          }
+        } else {
+          const [p, q] = rt.pts.length === 2 ? rt.pts : [rt.pts[1], rt.pts[2]];
+          const mx = (p[0] + q[0]) / 2, y = p[1], sg = type === "ca" ? -1 : 1;
+          for (let s = 0; s < 6; s++) for (const dx of [0, -w / 2, w / 2]) cands.push(rect(mx - w / 2 + dx, sg < 0 ? y - 4 - h - s * LINE_H : y + 4 + s * LINE_H, w, h));
+        }
+        const pick = cands.find((c) => !overlaps(c, nodeRects) && !overlaps(c, placed) && !overlaps(c, others))
+          || cands.find((c) => !overlaps(c, nodeRects) && !overlaps(c, placed)) || cands[0]
+          || rect((rt.pts[0][0] + rt.pts[rt.pts.length - 1][0]) / 2, (rt.pts[0][1] + rt.pts[rt.pts.length - 1][1]) / 2, w, h);
+        placed.push(pick);
+        labels.push({ type, label, e, r: pick });
+      });
+    });
+
+  // Fit the viewBox (and the Group Identity Frame, when linked) around everything that was laid out.
+  const allX = [...nodeRects.flatMap((b) => [b.x, b.x + b.w]), ...routes.flatMap((rt) => rt.pts.map((p) => p[0])), ...placed.flatMap((b) => [b.x, b.x + b.w])];
+  const allY = [...nodeRects.flatMap((b) => [b.y, b.y + b.h]), ...routes.flatMap((rt) => rt.pts.map((p) => p[1])), ...placed.flatMap((b) => [b.y, b.y + b.h])];
+  let minX = Math.min(0, ...allX), maxX = Math.max(0, ...allX), minY = Math.min(0, ...allY), maxY = Math.max(0, ...allY);
+  let frame = null;
+  if (frameStyle && nodes.size) {
+    frame = rect(minX - 28, minY - 40, maxX - minX + 56, maxY - minY + 64);
+    minX = frame.x; minY = frame.y; maxX = frame.x + frame.w; maxY = frame.y + frame.h;
+  }
+  const width = Math.max(560, Math.ceil(maxX - minX + PAD * 2)), height = Math.ceil(maxY - minY + PAD * 2);
+  const offX = (width - (maxX - minX)) / 2 - minX, offY = PAD - minY;
+  svg.setAttribute("width", width); svg.setAttribute("height", height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  const root = svgEl("g", { transform: `translate(${offX},${offY})` });
+  svg.appendChild(root);
+
   // Group Identity Frame: system boundary drawn behind everything, labelled top-left.
-  if (frameStyle && pos.size) {
-    const boxes = [...pos.values()];
-    const fx = Math.min(...boxes.map((b) => b.x), ...laneXs) - 28, fy = Math.min(...boxes.map((b) => b.y)) - 40;
-    const fw = Math.max(...boxes.map((b) => b.x + b.w), ...laneXs) + 28 - fx, fh = Math.max(...boxes.map((b) => b.y + b.h)) + 24 - fy;
+  if (frame) {
     const g = svgEl("g", { class: "frame" });
-    g.appendChild(applyStyle(svgEl("rect", { x: fx, y: fy, width: fw, height: fh, rx: clamp(frameStyle.radius, 0, 40, 8) }),
+    g.appendChild(applyStyle(svgEl("rect", { x: frame.x, y: frame.y, width: frame.w, height: frame.h, rx: clamp(frameStyle.radius, 0, 40, 8) }),
       { fill: "var(--bg-sunken)", stroke: "var(--fg)", "stroke-width": 1, ...boxCss(frameStyle) }));
-    g.appendChild(applyStyle(svgEl("text", { x: fx + 12, y: fy + 20 }, trunc(m.system || "System", 60)), { "font-weight": 600, ...fontCss(frameStyle) }));
-    svg.insertBefore(g, defs.nextSibling); // behind edges and nodes
+    g.appendChild(applyStyle(svgEl("text", { x: frame.x + 12, y: frame.y + 20 }, trunc(m.system || "System", 60)), { "font-weight": 600, ...fontCss(frameStyle) }));
+    root.appendChild(g);
   }
 
-  const nodeLayer = svgEl("g", {});
-  pos.forEach(({ x, y, w, h, n }) => {
+  const edgeLayer = svgEl("g", {}), labelLayer = svgEl("g", {}), nodeLayer = svgEl("g", {});
+  routes.forEach(({ g, pts }) => {
+    const path = svgEl("path", { d: "M" + pts.map((p) => p.join(",")).join(" L"), class: g.type, "marker-end": `url(#ah-${g.type})` });
+    if (edgeKinds[g.type]) applyStyle(path, edgeKinds[g.type].css);
+    path.appendChild(svgEl("title", {}, g.edges.map(({ e }) => `${e.id}: ${g.type === "ca" ? e.action : e.signal} (${e.source} → ${e.target})`).join("\n")));
+    edgeLayer.appendChild(path);
+  });
+  labels.forEach(({ type, label, e, r }) => {
+    const lbl = svgEl("text", { x: r.x, y: r.y + r.h - 3, class: "lbl-" + type }, label);
+    if (edgeKinds[type]) applyStyle(lbl, { fill: edgeKinds[type].color });
+    lbl.appendChild(svgEl("title", {}, `${e.id}: ${type === "ca" ? e.action : e.signal}`));
+    labelLayer.appendChild(lbl);
+  });
+  nodes.forEach(({ x, y, w, h, n }) => {
     const st = nodeStyle[n.kind];
     const g = svgEl("g", { class: "node " + n.kind, transform: `translate(${x},${y})` });
     g.appendChild(applyStyle(svgEl("rect", { width: w, height: h, rx: clamp(st && st.radius, 0, 40, n.kind === "ctrl" ? 6 : 2) }), boxCss(st)));
-    const chars = Math.max(10, Math.floor(w / 7));
+    const chars = Math.max(10, Math.floor((w - 16) / 6.5));
     g.appendChild(applyStyle(svgEl("text", { x: w / 2, y: h / 2 - 5, "text-anchor": "middle", "font-weight": 600 }, trunc(n.name || n.id, chars)), fontCss(st)));
-    const sub = n.kind === "ctrl"
-      ? `${n.id} · ${(n.process_model?.variables || []).length} PM vars`
-      : `${n.id} · ${(n.states || []).length} states`;
     const subCss = fontCss(st, 0.85); delete subCss.fill; delete subCss["font-weight"];
-    g.appendChild(applyStyle(svgEl("text", { x: w / 2, y: h / 2 + 13, "text-anchor": "middle", class: "sub" }, sub), subCss));
+    g.appendChild(applyStyle(svgEl("text", { x: w / 2, y: h / 2 + 13, "text-anchor": "middle", class: "sub" }, subOf(n)), subCss));
     g.appendChild(svgEl("title", {}, n.kind === "ctrl"
       ? `${n.name}\nVariables: ${(n.process_model?.variables || []).join(", ")}\nAssumptions: ${(n.process_model?.assumptions || []).join("; ")}`
       : `${n.name}\nStates: ${(n.states || []).join(", ")}`));
     nodeLayer.appendChild(g);
   });
-  svg.append(edgeLayer, nodeLayer, labelLayer);
+  root.append(edgeLayer, nodeLayer, labelLayer);
   $("counts").textContent = `${ctrls.length} controllers · ${procs.length} processes · ${cas.length} CAs · ${fbs.length} feedback`;
 }
 
@@ -1273,8 +1424,8 @@ const PENPOT_SELECTION_CODE = `(function () {
   if (!sel.length) return out;
   var ROLES = [
     ["frame", /group identity frame|identity frame|system boundary/i],
-    ["fb", /connector feedback|feedback connector/i],
-    ["ca", /connector control|control connector/i],
+    ["fb", /connector feedback|feedback connector|^\\s*(process )?feedback\\b/i],
+    ["ca", /connector control|control connector|^\\s*control action\\b/i],
     ["proc", /controlled process/i],
     ["ctrl", /\\bcontroller\\b/i]
   ];
