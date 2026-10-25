@@ -12,6 +12,7 @@ This repository is **private initially** while STPA models and workshop material
 |------|---------|
 | `docs/` | Reference material, workshop notes, exported diagrams |
 | `analysis/` | STPA models and working artifacts (control diagrams, UCA tables, scenarios) |
+| `workbench/` | Single-file STPA control-structure editor with LLM analysis (open `workbench/index.html` in a browser) |
 
 ## Design system
 

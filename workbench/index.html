@@ -1,0 +1,1108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HFA STPA Workbench</title>
+<!--
+  HFA STPA Workbench — single-file, zero-dependency STPA control-structure editor + LLM analyst.
+
+  Open this file directly (file://) or serve it from any static server. No build step, no frameworks.
+  Colours come from the HFA DS tokens (tokens.json → mode/light, mode/dark), copied in as CSS variables.
+
+  Sections in the <script> below:
+    1. Storage helpers (localStorage, guarded)
+    2. Presets + STPA data model validation
+    3. Control-structure diagram (SVG)
+    4. Provider adapters: callLLM() for Claude / Gemini / local (Ollama, LM Studio, LocalAI)
+    5. MCP layer: tool schemas in MCP format, local JSON-RPC dispatcher, optional MCP-over-SSE bridge
+    6. Chat loop, Markdown rendering, quick actions
+-->
+<style>
+  :root {
+    --bg: #F0F6FC; --bg-elev: #FFFFFF; --bg-sunken: #E6EDF3;
+    --fg: #0D1117; --fg-muted: #57606A; --fg-subtle: #8B949E;
+    --brand: #D70000; --brand-subtle: #FFE5E5; --on-brand: #FFFFFF;
+    --info: #007FFF; --success: #228B22; --warning: #B38600; --error: #C70039;
+    --bg-error: #FBE3E8; --bg-warning: #FFF6D6; --bg-success: #E3F3E8;
+    --border: #D0D7DE; --radius: 6px;
+    --font: "Source Sans 3", "Source Sans Pro", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #2D333B; --bg-elev: #383D45; --bg-sunken: #22272E;
+      --fg: #FAFBFC; --fg-muted: #C9D1D9; --fg-subtle: #9CA3AF;
+      --brand: #FF4444; --brand-subtle: #3D1515; --on-brand: #FFFFFF;
+      --info: #58A6FF; --success: #3FB950; --warning: #FFC300; --error: #E03E3E;
+      --bg-error: #602A36; --bg-warning: #6B5414; --bg-success: #1A5A42;
+      --border: #4A515B; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #2D333B; --bg-elev: #383D45; --bg-sunken: #22272E;
+    --fg: #FAFBFC; --fg-muted: #C9D1D9; --fg-subtle: #9CA3AF;
+    --brand: #FF4444; --brand-subtle: #3D1515; --on-brand: #FFFFFF;
+    --info: #58A6FF; --success: #3FB950; --warning: #FFC300; --error: #E03E3E;
+    --bg-error: #602A36; --bg-warning: #6B5414; --bg-success: #1A5A42;
+    --border: #4A515B; color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font); display: flex; flex-direction: column; }
+  button, select, input, textarea { font: inherit; color: inherit; }
+  button {
+    background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 5px 10px; cursor: pointer; white-space: nowrap;
+  }
+  button:hover { border-color: var(--fg-subtle); }
+  button.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+  button:disabled { opacity: .5; cursor: default; }
+  select, input[type=text], input[type=password], input[type=url], input[type=number] {
+    background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 5px 8px; min-width: 0;
+  }
+  :focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
+
+  header {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 16px; background: var(--bg-elev); border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 16px; margin: 0 auto 0 0; display: flex; align-items: center; gap: 8px; }
+  header h1 .mark { width: 10px; height: 10px; border-radius: 2px; background: var(--brand); }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 12px 16px; min-height: 0; }
+  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+  .panel { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; }
+  .panel > .bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 8px; border-bottom: 1px solid var(--border); }
+  .panel > .bar h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-muted); margin: 0 auto 0 0; }
+
+  #editor {
+    flex: 1 1 320px; min-height: 240px; resize: vertical; border: 0; padding: 10px; background: var(--bg-sunken);
+    font: 12.5px/1.5 var(--mono); tab-size: 2; white-space: pre; overflow: auto;
+  }
+  #issues { max-height: 140px; overflow: auto; border-top: 1px solid var(--border); font-size: 13px; }
+  #issues div { padding: 3px 10px; border-bottom: 1px solid var(--border); }
+  #issues .err { background: var(--bg-error); }
+  #issues .warn { background: var(--bg-warning); }
+  #issues .ok { background: var(--bg-success); }
+  #diagramWrap { border-top: 1px solid var(--border); overflow: auto; min-height: 200px; max-height: 46vh; background: var(--bg); }
+  #diagram { display: block; }
+  #diagram .node rect { stroke-width: 1.5; }
+  #diagram .ctrl rect { fill: var(--bg-elev); stroke: var(--brand); }
+  #diagram .proc rect { fill: var(--bg-sunken); stroke: var(--fg-muted); }
+  #diagram text { fill: var(--fg); font: 12px var(--font); }
+  #diagram .sub { fill: var(--fg-muted); font-size: 10.5px; }
+  #diagram .ca { stroke: var(--brand); fill: none; stroke-width: 1.5; }
+  #diagram .fb { stroke: var(--info); fill: none; stroke-width: 1.5; stroke-dasharray: 5 3; }
+  #diagram .lbl-ca, #diagram .lbl-fb { font-size: 11px; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round; }
+  #diagram .lbl-ca { fill: var(--brand); }
+  #diagram .lbl-fb { fill: var(--info); }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--fg-muted); padding: 6px 10px; }
+  .legend i { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--brand); vertical-align: middle; margin-right: 4px; }
+  .legend i.fb { border-top: 2px dashed var(--info); }
+
+  #log { flex: 1; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; min-height: 240px; }
+  .msg { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; max-width: 100%; overflow-x: auto; }
+  .msg.user { background: var(--brand-subtle); align-self: flex-end; max-width: 90%; white-space: pre-wrap; }
+  .msg.assistant { background: var(--bg-elev); }
+  .msg.tool { background: var(--bg-sunken); font-size: 12px; }
+  .msg.error { background: var(--bg-error); }
+  .msg .meta { font-size: 11px; color: var(--fg-subtle); margin-bottom: 4px; }
+  .msg pre { background: var(--bg-sunken); padding: 8px; border-radius: 4px; overflow: auto; font: 12px/1.45 var(--mono); }
+  .msg code { font-family: var(--mono); font-size: 12px; }
+  .msg table { border-collapse: collapse; margin: 6px 0; font-size: 13px; }
+  .msg th, .msg td { border: 1px solid var(--border); padding: 3px 6px; text-align: left; vertical-align: top; }
+  .msg th { background: var(--bg-sunken); }
+  .msg h3, .msg h4, .msg h5 { margin: 10px 0 4px; }
+  .msg p { margin: 6px 0; }
+  .msg ul, .msg ol { margin: 4px 0; padding-left: 22px; }
+  .quick { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px; border-bottom: 1px solid var(--border); }
+  form#chat { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
+  #prompt { flex: 1; resize: vertical; min-height: 40px; max-height: 200px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev); }
+  .status { font-size: 12px; color: var(--fg-muted); padding: 0 10px 6px; min-height: 18px; }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--fg-muted); }
+
+  /* Config drawer */
+  #drawer { position: fixed; inset: 0 0 0 auto; width: min(440px, 100vw); background: var(--bg-elev); border-left: 1px solid var(--border);
+    box-shadow: -8px 0 24px rgba(0,0,0,.18); transform: translateX(100%); transition: transform .18s ease; z-index: 10; overflow: auto; padding: 14px 16px; }
+  #drawer.open { transform: none; }
+  #drawer h2 { font-size: 15px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: center; }
+  #drawer fieldset { border: 1px solid var(--border); border-radius: var(--radius); margin: 0 0 12px; padding: 8px 10px 10px; }
+  #drawer legend { font-weight: 600; padding: 0 4px; }
+  #drawer label { display: grid; gap: 2px; margin: 6px 0; font-size: 13px; color: var(--fg-muted); }
+  #drawer label.inline { display: flex; align-items: center; gap: 6px; }
+  #drawer input[type=text], #drawer input[type=password], #drawer input[type=url], #drawer input[type=number], #drawer select { width: 100%; color: var(--fg); }
+  #drawer .hint { font-size: 12px; color: var(--fg-subtle); margin: 4px 0 0; }
+  #drawer textarea { width: 100%; min-height: 120px; font: 12px/1.4 var(--mono); background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="mark"></span>HFA STPA Workbench</h1>
+  <div class="row">
+    <label for="provider" class="pill">Provider</label>
+    <select id="provider" aria-label="LLM provider">
+      <option value="claude">Anthropic Claude</option>
+      <option value="gemini">Google Gemini</option>
+      <option value="local">Local (Ollama / LM Studio / LocalAI)</option>
+    </select>
+    <span id="modelBadge" class="pill" title="Model (change in Settings)"></span>
+    <button id="themeBtn" title="Toggle light/dark theme">Theme</button>
+    <button id="settingsBtn" class="primary">Settings</button>
+  </div>
+</header>
+
+<main>
+  <!-- ───────────── Left: STPA editor ───────────── -->
+  <section class="panel" aria-label="STPA control structure editor">
+    <div class="bar">
+      <h2>Control structure</h2>
+      <select id="preset" aria-label="Load preset"><option value="">Load preset…</option></select>
+      <button id="formatBtn" title="Pretty-print JSON">Format</button>
+      <button id="importBtn" title="Open a .json file">Open</button>
+      <button id="exportBtn" title="Download JSON">Save</button>
+      <input type="file" id="fileInput" accept=".json,application/json" hidden>
+    </div>
+    <textarea id="editor" spellcheck="false" aria-label="STPA JSON"></textarea>
+    <div id="issues" aria-live="polite"></div>
+    <div class="legend"><span><i></i>Control action</span><span><i class="fb"></i>Feedback</span><span id="counts"></span></div>
+    <div id="diagramWrap"><svg id="diagram" role="img" aria-label="Control structure diagram"></svg></div>
+  </section>
+
+  <!-- ───────────── Right: analysis chat ───────────── -->
+  <section class="panel" aria-label="Analysis">
+    <div class="bar">
+      <h2>Analysis</h2>
+      <button id="clearBtn" title="Start a new conversation">New chat</button>
+      <button id="saveLogBtn" title="Download conversation as Markdown">Export .md</button>
+    </div>
+    <div class="quick" id="quick"></div>
+    <div id="log" aria-live="polite"></div>
+    <div class="status" id="status"></div>
+    <form id="chat">
+      <textarea id="prompt" placeholder="Ask about the control structure… (Ctrl/⌘+Enter to send)" aria-label="Message"></textarea>
+      <button type="submit" class="primary" id="sendBtn">Send</button>
+    </form>
+  </section>
+</main>
+
+<!-- ───────────── Config drawer ───────────── -->
+<aside id="drawer" aria-label="Settings" aria-hidden="true">
+  <h2>Settings <button id="closeDrawer" aria-label="Close settings">✕</button></h2>
+
+  <fieldset>
+    <legend>Anthropic Claude</legend>
+    <label>API key <input type="password" id="claude_key" autocomplete="off" placeholder="sk-ant-…"></label>
+    <label>Model <input type="text" id="claude_model" list="claudeModels"></label>
+    <datalist id="claudeModels">
+      <option value="claude-opus-5-5"><option value="claude-sonnet-5-5"><option value="claude-haiku-5-5"><option value="claude-fable-5-1">
+    </datalist>
+    <label>Effort
+      <select id="claude_effort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select>
+    </label>
+    <label class="inline"><input type="checkbox" id="claude_fallbacks" checked> Server-side refusal fallback (<code>fallbacks: "default"</code>)</label>
+    <p class="hint">Calls api.anthropic.com directly from the browser with <code>anthropic-dangerous-direct-browser-access</code>. Your key is visible to anyone using this browser profile — use a restricted key.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Google Gemini</legend>
+    <label>API key <input type="password" id="gemini_key" autocomplete="off"></label>
+    <label>Model <input type="text" id="gemini_model" placeholder="gemini-2.5-pro"></label>
+    <p class="hint">Sent as the <code>x-goog-api-key</code> header (not in the URL).</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Local LLM</legend>
+    <label>Endpoint <input type="url" id="local_endpoint" placeholder="http://localhost:11434/v1/chat/completions"></label>
+    <label>Model <input type="text" id="local_model" placeholder="llama3.1"></label>
+    <label>API key (optional, sent as Bearer) <input type="password" id="local_key" autocomplete="off"></label>
+    <p class="hint">Endpoint path picks the wire format: <code>/v1/chat/completions</code> (OpenAI-compatible: Ollama, LM Studio, LocalAI), <code>/api/chat</code> or <code>/api/generate</code> (Ollama native). For Ollama from <code>file://</code>, start it with <code>OLLAMA_ORIGINS=*</code>.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>MCP</legend>
+    <label class="inline"><input type="checkbox" id="mcp_enabled" checked> Let the model call STPA tools (JSON-RPC <code>tools/call</code>)</label>
+    <label>MCP-over-SSE gateway URL (optional) <input type="url" id="mcp_sse_url" placeholder="http://localhost:8808/sse"></label>
+    <div class="row"><button id="mcpConnect" type="button">Connect gateway</button><span id="mcpState" class="pill">local tools only</span></div>
+    <p class="hint">Without a gateway, tools run locally in this page. With one, remote tools are listed alongside them and routed over SSE.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>System prompt</legend>
+    <textarea id="system_prompt" spellcheck="false"></textarea>
+    <div class="row" style="margin-top:6px"><button id="resetPrompt" type="button">Reset to default</button></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Storage</legend>
+    <label class="inline"><input type="checkbox" id="remember_keys" checked> Remember API keys in this browser (localStorage)</label>
+    <div class="row"><button id="forgetKeys" type="button">Forget stored keys</button></div>
+    <p class="hint">Keys never leave this page except in requests to the provider you select.</p>
+  </fieldset>
+</aside>
+
+<script>
+"use strict";
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   1. Storage helpers — every access is guarded (private windows can throw).
+   ═══════════════════════════════════════════════════════════════════════════ */
+const LS_PREFIX = "hfa-stpa:";
+const store = {
+  get(k, fallback = null) { try { const v = localStorage.getItem(LS_PREFIX + k); return v === null ? fallback : JSON.parse(v); } catch { return fallback; } },
+  set(k, v) { try { localStorage.setItem(LS_PREFIX + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
+  del(k) { try { localStorage.removeItem(LS_PREFIX + k); } catch { /* storage unavailable */ } },
+};
+const $ = (id) => document.getElementById(id);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2. Presets and STPA model validation
+   Schema (all arrays optional except controllers/controlled_processes):
+     system, losses[{id,description}], hazards[{id,description,losses[]}],
+     constraints[{id,description,hazards[]}],
+     controllers[{id,name,level?,process_model:{variables[],assumptions[]}}],
+     controlled_processes[{id,name,states[]}],
+     control_actions[{id,source,target,action,parameters[]}],
+     feedback[{id,source,target,signal,latency_tolerance_ms?}]
+   A control action may target another controller (hierarchical structures).
+   ═══════════════════════════════════════════════════════════════════════════ */
+const PRESETS = {
+  "Autonomous Emergency Braking (AEB)": {
+    system: "Autonomous Emergency Braking (AEB)",
+    losses: [
+      { id: "L1", description: "Loss of life or injury to vehicle occupants or other road users" },
+      { id: "L2", description: "Damage to the vehicle or objects outside the vehicle" }
+    ],
+    hazards: [
+      { id: "H1", description: "Vehicle does not maintain safe distance from obstacles", losses: ["L1", "L2"] },
+      { id: "H2", description: "Vehicle decelerates unnecessarily in traffic", losses: ["L1", "L2"] }
+    ],
+    constraints: [
+      { id: "SC1", description: "Braking must be applied when time-to-collision falls below the threshold", hazards: ["H1"] },
+      { id: "SC2", description: "Braking must not be applied without a confirmed obstacle", hazards: ["H2"] }
+    ],
+    controllers: [
+      { id: "c0", name: "Driver", level: 0,
+        process_model: { variables: ["PerceivedObstacle", "VehicleSpeed"], assumptions: ["Driver monitors the road"] } },
+      { id: "c1", name: "AEB Electronic Control Unit", level: 1,
+        process_model: { variables: ["ObstacleDistance", "RelativeSpeed", "BrakeStatus"], assumptions: ["Sensor inputs arrive within 10ms"] } }
+    ],
+    controlled_processes: [
+      { id: "p1", name: "Vehicle Braking Subsystem", states: ["Disengaged", "Applying", "FullyLocked"] }
+    ],
+    control_actions: [
+      { id: "ca0", source: "c0", target: "c1", action: "Enable/Override AEB", parameters: ["Mode"] },
+      { id: "ca1", source: "c1", target: "p1", action: "ApplyBrakingForce", parameters: ["PressureLevel"] },
+      { id: "ca2", source: "c0", target: "p1", action: "PressBrakePedal", parameters: ["PedalForce"] }
+    ],
+    feedback: [
+      { id: "fb0", source: "c1", target: "c0", signal: "AEB warning chime / HMI status", latency_tolerance_ms: 200 },
+      { id: "fb1", source: "p1", target: "c1", signal: "WheelSpeedSensorData", latency_tolerance_ms: 20 },
+      { id: "fb2", source: "p1", target: "c0", signal: "Felt deceleration", latency_tolerance_ms: 500 }
+    ]
+  },
+
+  "Railway level crossing": {
+    system: "Automatic railway level crossing with remote supervision",
+    losses: [
+      { id: "L1", description: "Death or injury to road users, train passengers or staff" },
+      { id: "L2", description: "Damage to rolling stock, vehicles or infrastructure" },
+      { id: "L3", description: "Loss of traffic availability (rail or road)" }
+    ],
+    hazards: [
+      { id: "H1", description: "Road user is on the crossing when a train occupies it", losses: ["L1", "L2"] },
+      { id: "H2", description: "Crossing remains closed long after the train has passed", losses: ["L3"] }
+    ],
+    constraints: [
+      { id: "SC1", description: "Barriers must be fully lowered before the train reaches the strike-out point", hazards: ["H1"] },
+      { id: "SC2", description: "Barriers must open within 30 s after the train has cleared the crossing", hazards: ["H2"] }
+    ],
+    controllers: [
+      { id: "c1", name: "Traffic Control Centre", level: 0,
+        process_model: { variables: ["CrossingStatus", "TrainPositions"], assumptions: ["Fault alarms are reported within 5 s"] } },
+      { id: "c2", name: "Interlocking / Crossing Controller", level: 1,
+        process_model: { variables: ["TrackOccupancy", "BarrierPosition", "LampStatus"], assumptions: ["Axle counters are reset correctly after maintenance"] } },
+      { id: "c3", name: "Train Driver", level: 1,
+        process_model: { variables: ["CrossingProtected", "TrainSpeed"], assumptions: ["Signal aspect reflects crossing state"] } }
+    ],
+    controlled_processes: [
+      { id: "p1", name: "Barriers and road signals", states: ["Raised", "Lowering", "Lowered", "Faulty"] },
+      { id: "p2", name: "Train", states: ["Approaching", "Occupying", "Cleared"] }
+    ],
+    control_actions: [
+      { id: "ca1", source: "c1", target: "c2", action: "Manual close / reset", parameters: ["CrossingId"] },
+      { id: "ca2", source: "c2", target: "p1", action: "Lower barriers", parameters: ["WarningTime_s"] },
+      { id: "ca3", source: "c2", target: "p1", action: "Raise barriers", parameters: [] },
+      { id: "ca4", source: "c3", target: "p2", action: "Brake / traction", parameters: ["Demand"] }
+    ],
+    feedback: [
+      { id: "fb1", source: "c2", target: "c1", signal: "Crossing status & fault alarms", latency_tolerance_ms: 5000 },
+      { id: "fb2", source: "p1", target: "c2", signal: "Barrier position detection", latency_tolerance_ms: 500 },
+      { id: "fb3", source: "p2", target: "c2", signal: "Track circuit / axle counter occupancy", latency_tolerance_ms: 300 },
+      { id: "fb4", source: "c2", target: "c3", signal: "Crossing protection signal aspect", latency_tolerance_ms: 1000 },
+      { id: "fb5", source: "p2", target: "c3", signal: "Speed indication (DMI)", latency_tolerance_ms: 500 }
+    ]
+  },
+
+  "Insulin pump (closed loop)": {
+    system: "Closed-loop insulin delivery",
+    losses: [{ id: "L1", description: "Patient harm (hypo- or hyperglycaemia)" }],
+    hazards: [
+      { id: "H1", description: "Insulin delivered exceeds patient need", losses: ["L1"] },
+      { id: "H2", description: "Insulin delivered is below patient need for a prolonged time", losses: ["L1"] }
+    ],
+    constraints: [{ id: "SC1", description: "Dose must not be delivered when glucose is below 70 mg/dL", hazards: ["H1"] }],
+    controllers: [
+      { id: "c1", name: "Patient", level: 0, process_model: { variables: ["MealSize", "FeelsHypo"], assumptions: ["Patient announces meals"] } },
+      { id: "c2", name: "Dosing algorithm", level: 1, process_model: { variables: ["Glucose", "InsulinOnBoard", "Trend"], assumptions: ["CGM readings every 5 min"] } }
+    ],
+    controlled_processes: [{ id: "p1", name: "Pump & patient physiology", states: ["Idle", "Basal", "Bolus", "Suspended"] }],
+    control_actions: [
+      { id: "ca1", source: "c1", target: "c2", action: "Announce meal / set target", parameters: ["Carbs_g"] },
+      { id: "ca2", source: "c2", target: "p1", action: "Deliver insulin", parameters: ["Units", "Rate"] },
+      { id: "ca3", source: "c2", target: "p1", action: "Suspend delivery", parameters: [] }
+    ],
+    feedback: [
+      { id: "fb1", source: "p1", target: "c2", signal: "CGM glucose reading", latency_tolerance_ms: 300000 },
+      { id: "fb2", source: "c2", target: "c1", signal: "Alerts and dose history", latency_tolerance_ms: 60000 }
+    ]
+  }
+};
+
+/** Parse editor text; returns { model, error } with a line/column for syntax errors. */
+function parseModel(text) {
+  try { return { model: JSON.parse(text) }; }
+  catch (e) {
+    const m = /position (\d+)/.exec(e.message);
+    if (m) {
+      const pos = +m[1], before = text.slice(0, pos);
+      const line = before.split("\n").length, col = pos - before.lastIndexOf("\n");
+      return { error: `JSON syntax error at line ${line}, column ${col}: ${e.message}`, pos };
+    }
+    return { error: "JSON syntax error: " + e.message };
+  }
+}
+
+/** Structural STPA checks. Errors break the model; warnings are analysis hints. */
+function validateModel(m) {
+  const errors = [], warnings = [];
+  if (!m || typeof m !== "object" || Array.isArray(m)) return { errors: ["Root must be a JSON object"], warnings };
+  const arr = (k) => Array.isArray(m[k]) ? m[k] : (m[k] === undefined ? [] : (errors.push(`"${k}" must be an array`), []));
+  const controllers = arr("controllers"), processes = arr("controlled_processes");
+  const cas = arr("control_actions"), fbs = arr("feedback");
+  const losses = arr("losses"), hazards = arr("hazards"), constraints = arr("constraints");
+  if (!m.system) warnings.push(`Missing "system" name`);
+  if (!controllers.length) errors.push("At least one controller is required");
+  if (!processes.length) warnings.push("No controlled processes defined");
+
+  const ids = new Map();
+  const reg = (kind, list) => list.forEach((x, i) => {
+    if (!x || typeof x !== "object") return errors.push(`${kind}[${i}] must be an object`);
+    if (!x.id) return errors.push(`${kind}[${i}] is missing "id"`);
+    if (ids.has(x.id)) errors.push(`Duplicate id "${x.id}" (${ids.get(x.id)} and ${kind})`);
+    else ids.set(x.id, kind);
+  });
+  reg("controllers", controllers); reg("controlled_processes", processes);
+  reg("control_actions", cas); reg("feedback", fbs);
+  reg("losses", losses); reg("hazards", hazards); reg("constraints", constraints);
+
+  const isCtrl = (id) => ids.get(id) === "controllers";
+  const isNode = (id) => isCtrl(id) || ids.get(id) === "controlled_processes";
+  cas.forEach((ca) => {
+    if (!ca || !ca.id) return;
+    if (!isCtrl(ca.source)) errors.push(`Control action ${ca.id}: source "${ca.source}" is not a controller`);
+    if (!isNode(ca.target)) errors.push(`Control action ${ca.id}: target "${ca.target}" does not exist`);
+    if (!ca.action) warnings.push(`Control action ${ca.id} has no "action" name`);
+  });
+  fbs.forEach((fb) => {
+    if (!fb || !fb.id) return;
+    if (!isNode(fb.source)) errors.push(`Feedback ${fb.id}: source "${fb.source}" does not exist`);
+    if (!isCtrl(fb.target)) errors.push(`Feedback ${fb.id}: target "${fb.target}" is not a controller`);
+    if (fb.latency_tolerance_ms !== undefined && !(typeof fb.latency_tolerance_ms === "number" && fb.latency_tolerance_ms >= 0))
+      errors.push(`Feedback ${fb.id}: latency_tolerance_ms must be a non-negative number`);
+  });
+  hazards.forEach((h) => (h.losses || []).forEach((l) => { if (ids.get(l) !== "losses") warnings.push(`Hazard ${h.id} references unknown loss "${l}"`); }));
+  constraints.forEach((c) => (c.hazards || []).forEach((h) => { if (ids.get(h) !== "hazards") warnings.push(`Constraint ${c.id} references unknown hazard "${h}"`); }));
+
+  // STPA hints: every control action should have a feedback path closing the loop.
+  cas.forEach((ca) => {
+    if (!ca || !isCtrl(ca.source) || !isNode(ca.target)) return;
+    if (!fbs.some((fb) => fb && fb.source === ca.target && fb.target === ca.source))
+      warnings.push(`Open loop: no feedback from "${ca.target}" to "${ca.source}" for ${ca.id} (${ca.action})`);
+  });
+  processes.forEach((p) => { if (p && p.id && !cas.some((ca) => ca && ca.target === p.id)) warnings.push(`Process "${p.name || p.id}" receives no control actions`); });
+  controllers.forEach((c) => {
+    if (!c || !c.id) return;
+    const vars = c.process_model && c.process_model.variables;
+    if (!Array.isArray(vars) || !vars.length) warnings.push(`Controller "${c.name || c.id}" has no process-model variables`);
+  });
+  return { errors, warnings };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3. Control-structure diagram (SVG, built with createElementNS — no innerHTML)
+   Layout: controllers ranked top-down by control authority (explicit "level"
+   wins), controlled processes on the bottom row. Control actions go down on the
+   left of each node pair, feedback goes up on the right (dashed).
+   ═══════════════════════════════════════════════════════════════════════════ */
+const SVGNS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs, text) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+const trunc = (s, n) => (s = String(s ?? "")).length > n ? s.slice(0, n - 1) + "…" : s;
+
+function renderDiagram(m) {
+  const svg = $("diagram");
+  svg.replaceChildren();
+  const ctrls = (m.controllers || []).filter((c) => c && c.id);
+  const procs = (m.controlled_processes || []).filter((p) => p && p.id);
+  const cas = (m.control_actions || []).filter((x) => x && x.id);
+  const fbs = (m.feedback || []).filter((x) => x && x.id);
+
+  // Rank controllers: explicit level, else 1 + max rank of controllers commanding it.
+  const rank = new Map(ctrls.map((c) => [c.id, Number.isFinite(c.level) ? c.level : 0]));
+  for (let pass = 0; pass < ctrls.length; pass++) {
+    cas.forEach((ca) => {
+      const tgt = ctrls.find((c) => c.id === ca.target);
+      if (tgt && !Number.isFinite(tgt.level) && rank.has(ca.source)) rank.set(tgt.id, Math.max(rank.get(tgt.id), rank.get(ca.source) + 1));
+    });
+  }
+  const levels = [...new Set(rank.values())].sort((a, b) => a - b);
+  const rows = levels.map((lv) => ctrls.filter((c) => rank.get(c.id) === lv).map((c) => ({ ...c, kind: "ctrl" })));
+  if (procs.length) rows.push(procs.map((p) => ({ ...p, kind: "proc" })));
+
+  const W = 180, H = 56, GAPX = 60, ROWH = 170, PAD = 30;
+  const width = Math.max(560, Math.max(1, ...rows.map((r) => r.length)) * (W + GAPX) + PAD * 2);
+  const height = rows.length * ROWH - (ROWH - H) + PAD * 2;
+  svg.setAttribute("width", width); svg.setAttribute("height", height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+
+  const defs = svgEl("defs", {});
+  [["ah-ca", "var(--brand)"], ["ah-fb", "var(--info)"]].forEach(([id, color]) => {
+    const mk = svgEl("marker", { id, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" });
+    mk.appendChild(svgEl("path", { d: "M0,0 L10,5 L0,10 z", fill: color }));
+    defs.appendChild(mk);
+  });
+  svg.appendChild(defs);
+
+  const pos = new Map();
+  rows.forEach((row, ri) => {
+    const rowW = row.length * W + (row.length - 1) * GAPX;
+    const x0 = (width - rowW) / 2;
+    row.forEach((n, i) => pos.set(n.id, { x: x0 + i * (W + GAPX), y: PAD + ri * ROWH, n }));
+  });
+
+  // Edges: group by unordered node pair so CA and FB between the same nodes fan out.
+  const edgeLayer = svgEl("g", {}), labelLayer = svgEl("g", {});
+  const pairCount = new Map();
+  const edges = [...cas.map((e) => ({ e, type: "ca", label: e.action })), ...fbs.map((e) => ({ e, type: "fb", label: e.signal }))];
+  edges.forEach(({ e, type, label }) => {
+    const a = pos.get(e.source), b = pos.get(e.target);
+    if (!a || !b) return;
+    const key = type + ":" + [e.source, e.target].join(">");
+    const k = pairCount.get(key) || 0; pairCount.set(key, k + 1);
+    const off = (type === "ca" ? -1 : 1) * (22 + k * 16);
+    let x1, y1, x2, y2;
+    if (Math.abs(a.y - b.y) < 1) { // same row: horizontal
+      const dir = b.x > a.x ? 1 : -1, dy = (type === "ca" ? -10 : 10) - k * 8 * (type === "ca" ? 1 : -1);
+      x1 = a.x + (dir > 0 ? W : 0); x2 = b.x + (dir > 0 ? 0 : W); y1 = y2 = a.y + H / 2 + dy;
+    } else {
+      const down = b.y > a.y;
+      x1 = a.x + W / 2 + off; y1 = down ? a.y + H : a.y;
+      x2 = b.x + W / 2 + off; y2 = down ? b.y : b.y + H;
+    }
+    const midY = (y1 + y2) / 2;
+    const d = Math.abs(y1 - y2) < 1 ? `M${x1},${y1} L${x2},${y2}` : `M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}`;
+    const path = svgEl("path", { d, class: type, "marker-end": `url(#ah-${type})` });
+    path.appendChild(svgEl("title", {}, `${e.id}: ${label} (${e.source} → ${e.target})`));
+    edgeLayer.appendChild(path);
+    const flat = Math.abs(y1 - y2) < 1;
+    const lx = flat ? (x1 + x2) / 2 : (x1 + x2) / 2 + (type === "ca" ? -6 : 6);
+    const ly = flat ? y1 + (type === "ca" ? -5 : 14) : midY + (type === "ca" ? -2 : 12) + k * 12;
+    labelLayer.appendChild(svgEl("text", { x: lx, y: ly, class: "lbl-" + type, "text-anchor": flat ? "middle" : (type === "ca" ? "end" : "start") }, trunc(label || e.id, 26)));
+  });
+
+  const nodeLayer = svgEl("g", {});
+  pos.forEach(({ x, y, n }) => {
+    const g = svgEl("g", { class: "node " + n.kind, transform: `translate(${x},${y})` });
+    g.appendChild(svgEl("rect", { width: W, height: H, rx: n.kind === "ctrl" ? 6 : 2 }));
+    g.appendChild(svgEl("text", { x: W / 2, y: 23, "text-anchor": "middle", "font-weight": 600 }, trunc(n.name || n.id, 26)));
+    const sub = n.kind === "ctrl"
+      ? `${n.id} · ${(n.process_model?.variables || []).length} PM vars`
+      : `${n.id} · ${(n.states || []).length} states`;
+    g.appendChild(svgEl("text", { x: W / 2, y: 41, "text-anchor": "middle", class: "sub" }, sub));
+    g.appendChild(svgEl("title", {}, n.kind === "ctrl"
+      ? `${n.name}\nVariables: ${(n.process_model?.variables || []).join(", ")}\nAssumptions: ${(n.process_model?.assumptions || []).join("; ")}`
+      : `${n.name}\nStates: ${(n.states || []).join(", ")}`));
+    nodeLayer.appendChild(g);
+  });
+  svg.append(edgeLayer, nodeLayer, labelLayer);
+  $("counts").textContent = `${ctrls.length} controllers · ${procs.length} processes · ${cas.length} CAs · ${fbs.length} feedback`;
+}
+
+/* ── Editor wiring ───────────────────────────────────────────────────────── */
+let currentModel = null;      // last structure that parsed without errors
+let lastValidation = { errors: [], warnings: [] };
+
+function refreshEditor() {
+  const text = $("editor").value;
+  store.set("structure", text);
+  const issues = $("issues");
+  issues.replaceChildren();
+  const add = (cls, msg) => { const d = document.createElement("div"); d.className = cls; d.textContent = msg; issues.appendChild(d); };
+  const { model, error } = parseModel(text);
+  if (error) { add("err", error); lastValidation = { errors: [error], warnings: [] }; return; }
+  lastValidation = validateModel(model);
+  lastValidation.errors.forEach((e) => add("err", "✕ " + e));
+  lastValidation.warnings.forEach((w) => add("warn", "⚠ " + w));
+  if (!lastValidation.errors.length) {
+    currentModel = model;
+    if (!lastValidation.warnings.length) add("ok", "✓ Structure is valid and every control action has a feedback path");
+    renderDiagram(model);
+  }
+}
+function setEditor(obj) { $("editor").value = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); refreshEditor(); }
+
+let editTimer;
+$("editor").addEventListener("input", () => { clearTimeout(editTimer); editTimer = setTimeout(refreshEditor, 250); });
+$("editor").addEventListener("keydown", (e) => { // Tab inserts two spaces instead of leaving the editor
+  if (e.key === "Tab" && !e.shiftKey) { e.preventDefault(); document.execCommand("insertText", false, "  "); }
+});
+Object.keys(PRESETS).forEach((name) => $("preset").appendChild(new Option(name, name)));
+$("preset").addEventListener("change", (e) => {
+  const name = e.target.value; e.target.value = "";
+  if (name && confirm(`Replace the editor contents with "${name}"?`)) setEditor(PRESETS[name]);
+});
+$("formatBtn").addEventListener("click", () => { const { model } = parseModel($("editor").value); if (model) setEditor(model); });
+$("exportBtn").addEventListener("click", () => {
+  const name = (currentModel?.system || "stpa").replace(/[^\w-]+/g, "_").slice(0, 60);
+  download(`${name}.json`, $("editor").value, "application/json");
+});
+$("importBtn").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (f) setEditor(await f.text());
+});
+function download(filename, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4. Provider adapters
+   callLLM() takes a provider-neutral conversation and returns { text, raw }.
+   messages: [{ role: "user" | "assistant", content: string }]
+   Errors are thrown with the provider's own message so they show in the log.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const DEFAULTS = {
+  claude_model: "claude-opus-5-5",
+  gemini_model: "gemini-2.5-pro",
+  local_endpoint: "http://localhost:11434/v1/chat/completions",
+  local_model: "llama3.1",
+};
+
+async function readJson(res) {
+  const raw = await res.text();
+  let data; try { data = JSON.parse(raw); } catch { data = null; }
+  if (!res.ok) {
+    const msg = data?.error?.message || data?.error || raw.slice(0, 500) || res.statusText;
+    throw new Error(`HTTP ${res.status}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
+  }
+  if (data === null) throw new Error("Response was not JSON: " + raw.slice(0, 300));
+  return data;
+}
+
+async function callLLM({ provider, systemPrompt, messages, signal }) {
+  const cfg = settings;
+
+  if (provider === "claude") {
+    if (!cfg.claude_key) throw new Error("Add an Anthropic API key in Settings.");
+    const headers = {
+      "content-type": "application/json",
+      "x-api-key": cfg.claude_key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    };
+    const body = {
+      model: cfg.claude_model || DEFAULTS.claude_model,
+      max_tokens: 16000,
+      system: systemPrompt,
+      messages,
+      output_config: { effort: cfg.claude_effort || "medium" },
+    };
+    if (cfg.claude_fallbacks) { // re-run declined requests on a fallback model, server-side
+      headers["anthropic-beta"] = "server-side-fallback-2026-07-01";
+      body.fallbacks = "default";
+    }
+    const data = await readJson(await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body), signal }));
+    // Thinking blocks may precede the answer, so join every text block instead of reading content[0].
+    const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n\n");
+    if (data.stop_reason === "refusal") {
+      const why = data.stop_details?.explanation || data.stop_details?.category || "no details";
+      return { text: (text ? text + "\n\n" : "") + `_The model declined this request (${why})._`, raw: data };
+    }
+    if (data.stop_reason === "max_tokens") return { text: text + "\n\n_…output truncated at max_tokens._", raw: data };
+    return { text: text || JSON.stringify(data), raw: data };
+  }
+
+  if (provider === "gemini") {
+    if (!cfg.gemini_key) throw new Error("Add a Gemini API key in Settings.");
+    const model = encodeURIComponent(cfg.gemini_model || DEFAULTS.gemini_model);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    const body = {
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
+    };
+    const data = await readJson(await fetch(url, {
+      method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": cfg.gemini_key }, body: JSON.stringify(body), signal,
+    }));
+    const cand = data.candidates?.[0];
+    const text = (cand?.content?.parts || []).map((p) => p.text || "").join("");
+    if (!text && (data.promptFeedback?.blockReason || cand?.finishReason)) return { text: `_No answer (${data.promptFeedback?.blockReason || cand.finishReason})._`, raw: data };
+    return { text: text || JSON.stringify(data), raw: data };
+  }
+
+  if (provider === "local") {
+    const endpoint = cfg.local_endpoint || DEFAULTS.local_endpoint;
+    const model = cfg.local_model || DEFAULTS.local_model;
+    const headers = { "content-type": "application/json" };
+    if (cfg.local_key) headers.authorization = "Bearer " + cfg.local_key;
+    const post = (body) => fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal }).then(readJson);
+
+    if (/\/api\/generate\/?$/.test(endpoint)) { // Ollama native, single prompt
+      const prompt = messages.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`).join("\n\n") + "\n\nAssistant:";
+      const data = await post({ model, system: systemPrompt, prompt, stream: false });
+      return { text: data.response ?? JSON.stringify(data), raw: data };
+    }
+    const chat = [{ role: "system", content: systemPrompt }, ...messages];
+    if (/\/api\/chat\/?$/.test(endpoint)) { // Ollama native chat
+      const data = await post({ model, messages: chat, stream: false });
+      return { text: data.message?.content ?? JSON.stringify(data), raw: data };
+    }
+    const data = await post({ model, messages: chat }); // OpenAI-compatible
+    return { text: data.choices?.[0]?.message?.content ?? JSON.stringify(data), raw: data };
+  }
+
+  throw new Error("Unknown provider: " + provider);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5. MCP layer
+   Browsers cannot spawn stdio MCP servers, so this page speaks MCP's JSON-RPC
+   2.0 message shapes over two transports:
+
+   a) LOCAL — tools defined below (MCP "Tool" objects: name / description /
+      inputSchema) are executed in-page by mcpLocalDispatch(). The model calls
+      them by replying with a fenced ```mcp block holding a tools/call request;
+      the result goes back to it as the next user turn (max MAX_TOOL_ROUNDS).
+      This works with every provider, including small local models.
+
+   b) REMOTE — McpSseBridge implements the MCP HTTP+SSE client transport:
+        1. GET  <gateway>/sse                → server sends `event: endpoint` with a POST URL
+        2. POST <endpoint> {initialize}       → reply arrives as `event: message` on the SSE stream
+        3. POST <endpoint> notifications/initialized, then tools/list, tools/call …
+      To plug in a stdio server (filesystem, a requirements DB, a hazard log…), run
+      it behind a gateway that exposes SSE and allows CORS for this page's origin, e.g.
+          npx -y supergateway --stdio "npx -y @modelcontextprotocol/server-filesystem ./" --port 8808 --cors
+      then put http://localhost:8808/sse in Settings → MCP and press Connect. Remote tool
+      names are merged into the tool list shown to the model; calls to them are
+      forwarded over the bridge instead of running locally.
+      For Streamable-HTTP-only servers, replace connect()/request() with a single
+      POST to the MCP endpoint that reads either a JSON body or an SSE stream from
+      the response, keeping the same JSON-RPC payloads.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const MAX_TOOL_ROUNDS = 4;
+let pendingProposal = null; // structure proposed via propose_reconfiguration, awaiting user approval
+
+const LOCAL_TOOLS = [
+  { name: "get_control_structure", description: "Return the current STPA control structure JSON from the editor.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "validate_control_structure", description: "Run structural STPA checks (dangling references, duplicate ids, open control loops, missing process-model variables) on the current structure, or on a supplied one.",
+    inputSchema: { type: "object", properties: { structure: { type: "object", description: "Optional structure to check instead of the editor contents" } }, additionalProperties: false } },
+  { name: "list_control_loops", description: "List each control action with the feedback paths that close its loop and their latency tolerances.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "propose_reconfiguration", description: "Propose a complete replacement control structure. The user must approve it before it is loaded into the editor.",
+    inputSchema: { type: "object", properties: { structure: { type: "object" }, rationale: { type: "string" } }, required: ["structure", "rationale"], additionalProperties: false } },
+];
+
+function listLoops(m) {
+  const name = (id) => [...(m.controllers || []), ...(m.controlled_processes || [])].find((n) => n.id === id)?.name || id;
+  return (m.control_actions || []).map((ca) => ({
+    control_action: ca.id, action: ca.action, controller: name(ca.source), target: name(ca.target),
+    feedback: (m.feedback || []).filter((fb) => fb.source === ca.target && fb.target === ca.source)
+      .map((fb) => ({ id: fb.id, signal: fb.signal, latency_tolerance_ms: fb.latency_tolerance_ms ?? null })),
+  }));
+}
+
+const toolText = (obj) => ({ content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] });
+
+/** Local JSON-RPC 2.0 dispatcher with MCP method names. Returns a JSON-RPC response object. */
+async function mcpLocalDispatch(req) {
+  const reply = (result) => ({ jsonrpc: "2.0", id: req.id ?? null, result });
+  const fail = (code, message) => ({ jsonrpc: "2.0", id: req.id ?? null, error: { code, message } });
+  if (req.method === "tools/list") return reply({ tools: [...LOCAL_TOOLS, ...mcpRemote.tools] });
+  if (req.method !== "tools/call") return fail(-32601, `Method not found: ${req.method}`);
+
+  const { name, arguments: args = {} } = req.params || {};
+  if (mcpRemote.tools.some((t) => t.name === name)) {
+    try { return reply(await mcpRemote.request("tools/call", { name, arguments: args })); }
+    catch (e) { return fail(-32000, "Remote MCP error: " + e.message); }
+  }
+  const m = currentModel || {};
+  switch (name) {
+    case "get_control_structure": return reply(toolText(m));
+    case "validate_control_structure": return reply(toolText(validateModel(args.structure || m)));
+    case "list_control_loops": return reply(toolText(listLoops(m)));
+    case "propose_reconfiguration": {
+      const check = validateModel(args.structure);
+      if (check.errors.length) return reply({ ...toolText({ accepted: false, errors: check.errors }), isError: true });
+      pendingProposal = { structure: args.structure, rationale: args.rationale || "" };
+      return reply(toolText({ accepted: true, status: "Shown to the user with an Apply button; not applied yet.", warnings: check.warnings }));
+    }
+    default: return fail(-32602, `Unknown tool: ${name}`);
+  }
+}
+
+/** Minimal MCP HTTP+SSE client (see notes above). */
+class McpSseBridge {
+  constructor() { this.tools = []; this.es = null; this.postUrl = null; this.nextId = 1; this.waiting = new Map(); }
+  get connected() { return !!this.postUrl; }
+  connect(sseUrl, timeoutMs = 8000) {
+    this.close();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.close(); reject(new Error("timed out waiting for the endpoint event")); }, timeoutMs);
+      this.es = new EventSource(sseUrl);
+      this.es.addEventListener("endpoint", async (ev) => {
+        this.postUrl = new URL(ev.data, sseUrl).href;
+        try {
+          await this.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "hfa-stpa-workbench", version: "1.0.0" } });
+          await this.notify("notifications/initialized");
+          this.tools = (await this.request("tools/list", {})).tools || [];
+          clearTimeout(timer); resolve(this.tools);
+        } catch (e) { clearTimeout(timer); this.close(); reject(e); }
+      });
+      this.es.addEventListener("message", (ev) => {
+        let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+        const w = this.waiting.get(msg.id); if (!w) return;
+        this.waiting.delete(msg.id);
+        msg.error ? w.reject(new Error(msg.error.message)) : w.resolve(msg.result);
+      });
+      this.es.onerror = () => { if (!this.postUrl) { clearTimeout(timer); this.close(); reject(new Error("SSE connection failed (check URL and CORS)")); } };
+    });
+  }
+  async post(payload) {
+    const res = await fetch(this.postUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+    if (!res.ok && res.status !== 202) throw new Error(`HTTP ${res.status}`);
+  }
+  request(method, params) {
+    const id = this.nextId++;
+    const p = new Promise((resolve, reject) => {
+      this.waiting.set(id, { resolve, reject });
+      setTimeout(() => { if (this.waiting.delete(id)) reject(new Error(method + " timed out")); }, 30000);
+    });
+    return this.post({ jsonrpc: "2.0", id, method, params }).then(() => p);
+  }
+  notify(method, params) { return this.post({ jsonrpc: "2.0", method, ...(params ? { params } : {}) }); }
+  close() { this.es?.close(); this.es = null; this.postUrl = null; this.tools = []; this.waiting.clear(); }
+}
+const mcpRemote = new McpSseBridge();
+
+$("mcpConnect").addEventListener("click", async () => {
+  const url = $("mcp_sse_url").value.trim();
+  if (!url) { mcpRemote.close(); $("mcpState").textContent = "local tools only"; return; }
+  $("mcpState").textContent = "connecting…";
+  try { const tools = await mcpRemote.connect(url); $("mcpState").textContent = `connected · ${tools.length} remote tools`; }
+  catch (e) { $("mcpState").textContent = "failed: " + e.message; }
+});
+
+/** Pull a tools/call request out of a ```mcp fenced block, if the reply contains one. */
+function extractToolCall(text) {
+  const m = /```mcp\s*\n([\s\S]*?)```/.exec(text);
+  if (!m) return null;
+  try { const req = JSON.parse(m[1]); return req && req.method ? req : null; } catch { return null; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   6. Chat loop, prompts, rendering
+   ═══════════════════════════════════════════════════════════════════════════ */
+const DEFAULT_SYSTEM_PROMPT = `You are an expert safety analyst applying STPA (System-Theoretic Process Analysis, Leveson & Thomas, STPA Handbook) to the hierarchical control structure supplied as JSON.
+
+Method:
+1. Losses, hazards and system-level constraints: use those in the JSON; propose missing ones explicitly marked as proposals.
+2. Unsafe Control Actions (UCAs): for EVERY control action evaluate all four types —
+   (a) Not providing causes a hazard; (b) Providing causes a hazard;
+   (c) Providing too early, too late or out of sequence; (d) Stopped too soon or applied too long.
+   Write each UCA as: <Source controller> <type> <control action> when <context>, leading to [H#]. Give each an id (UCA-1, …).
+3. Loss scenarios and causal factors, including process-model flaws: the controller's belief diverges from the real process state
+   (e.g. believes the vehicle is stationary when it is moving), missing/delayed/incorrect feedback (compare feedback latency_tolerance_ms
+   with the control loop's dynamics), stale assumptions, conflicting controllers, and unsafe control algorithms.
+4. Derive controller constraints that prevent each UCA, traceable to UCA ids.
+
+Rules:
+- Reference elements by their JSON ids (c1, ca2, fb3, H1…). Do not invent components without labelling them "proposed".
+- Prefer Markdown tables for UCA lists: columns Control action | Not provided | Provided | Too early/late/order | Too long/short.
+- Be concise and specific; state uncertainty instead of guessing.
+- If you propose a reconfigured structure, give the complete JSON in one \`\`\`json block using the same schema.`;
+
+const TOOL_PROMPT = (tools) => `
+
+You can call tools (MCP JSON-RPC). To call one, reply with ONLY a fenced block and nothing else:
+\`\`\`mcp
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"<tool>","arguments":{}}}
+\`\`\`
+The result arrives in the next message. Call tools only when they help; the current structure is already included below.
+Available tools (tools/list):
+${JSON.stringify(tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })))}`;
+
+const QUICK_ACTIONS = [
+  ["Identify UCAs", "Identify the Unsafe Control Actions for every control action in the current structure, in a table per controller, with hazard links."],
+  ["Loss scenarios", "For the most severe UCAs, develop loss scenarios: why would the controller issue the unsafe action (process-model flaws, feedback problems, algorithm flaws) and why might a correct action not be followed?"],
+  ["Check feedback latency", "Check every feedback path: is latency_tolerance_ms adequate for the dynamics of the control loop it closes? Flag missing, delayed or insufficient feedback and open loops, and the process-model flaws each could cause."],
+  ["Process-model flaws", "For each controller, list ways its process model (variables and assumptions) can diverge from the actual process state, and the UCAs each divergence would cause."],
+  ["Suggest reconfiguration", "Suggest a reconfiguration of the control structure that closes open loops and reduces the most severe UCAs. Explain the changes, then give the complete revised JSON."],
+  ["Safety constraints", "Derive controller-level safety constraints from the UCAs, traceable to UCA and hazard ids."],
+];
+
+let history = [];      // [{ role, content }] as sent to the provider
+let busy = null;       // AbortController while a request runs
+
+function buildSystemPrompt() {
+  let sp = settings.system_prompt || DEFAULT_SYSTEM_PROMPT;
+  if (settings.mcp_enabled) sp += TOOL_PROMPT([...LOCAL_TOOLS, ...mcpRemote.tools]);
+  const errs = lastValidation.errors.length ? `\n\nNote: the editor currently has errors (${lastValidation.errors.join("; ")}); the last valid version is shown.` : "";
+  return `${sp}${errs}\n\nCurrent control structure (JSON):\n${JSON.stringify(currentModel || {}, null, 2)}`;
+}
+
+async function send(userText) {
+  if (busy || !userText.trim()) return;
+  if (!currentModel) { addMessage("error", "Fix the JSON in the editor first — there is no valid structure to analyse."); return; }
+  addMessage("user", userText);
+  history.push({ role: "user", content: userText });
+  busy = new AbortController();
+  setBusy(true);
+  const provider = settings.provider;
+  try {
+    for (let round = 0; ; round++) {
+      setStatus(round ? `Running tool round ${round}…` : `Waiting for ${providerLabel()}…`);
+      const t0 = performance.now();
+      const { text } = await callLLM({ provider, systemPrompt: buildSystemPrompt(), messages: history, signal: busy.signal });
+      history.push({ role: "assistant", content: text });
+      const call = settings.mcp_enabled ? extractToolCall(text) : null;
+      if (!call || round >= MAX_TOOL_ROUNDS) {
+        addMessage("assistant", text, `${providerLabel()} · ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+        break;
+      }
+      const response = await mcpLocalDispatch(call);
+      addMessage("tool", "```json\n" + JSON.stringify({ request: call, response }, null, 2) + "\n```", `MCP ${call.params?.name || call.method}`);
+      if (pendingProposal) { addProposal(pendingProposal); pendingProposal = null; }
+      history.push({ role: "user", content: "MCP tool result (JSON-RPC response):\n```json\n" + JSON.stringify(response) + "\n```" });
+    }
+    setStatus("");
+  } catch (e) {
+    history.pop(); // drop the unanswered user turn so the conversation stays well-formed
+    addMessage("error", e.name === "AbortError" ? "Request cancelled." : explainError(e));
+    setStatus("");
+  } finally {
+    busy = null; setBusy(false);
+  }
+}
+
+function explainError(e) {
+  let msg = e.message || String(e);
+  if (e instanceof TypeError && /fetch|network/i.test(msg)) {
+    msg += settings.provider === "local"
+      ? "\nCould not reach the local endpoint. Check it is running and allows this origin (Ollama: set OLLAMA_ORIGINS=*; LM Studio: enable CORS)."
+      : "\nNetwork error — check your connection, proxy or browser extensions.";
+  }
+  return msg;
+}
+
+const providerLabel = () => ({
+  claude: settings.claude_model || DEFAULTS.claude_model,
+  gemini: settings.gemini_model || DEFAULTS.gemini_model,
+  local: settings.local_model || DEFAULTS.local_model,
+})[settings.provider];
+
+function setBusy(on) {
+  $("sendBtn").textContent = on ? "Stop" : "Send";
+  $("sendBtn").classList.toggle("primary", !on);
+  document.querySelectorAll("#quick button").forEach((b) => (b.disabled = on));
+}
+const setStatus = (t) => ($("status").textContent = t);
+
+/* ── Safe Markdown → DOM (all text is escaped first; no raw HTML from the model) ── */
+const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+function inline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
+    .replace(/(^|\W)_([^_\s][^_]*)_(?=\W|$)/g, "$1<em>$2</em>");
+}
+function renderMarkdown(md) {
+  const out = []; const lines = md.replace(/\r\n/g, "\n").split("\n");
+  let i = 0, list = null;
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  while (i < lines.length) {
+    const line = lines[i];
+    const fence = /^```(\w*)\s*$/.exec(line);
+    if (fence) {
+      closeList();
+      const buf = []; i++;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) buf.push(lines[i++]);
+      i++;
+      out.push(`<pre data-lang="${esc(fence[1])}"><code>${esc(buf.join("\n"))}</code></pre>`);
+      continue;
+    }
+    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
+      closeList();
+      const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
+      let html = "<table><thead><tr>" + cells(line).map((c) => `<th>${c}</th>`).join("") + "</tr></thead><tbody>";
+      i += 2;
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) html += "<tr>" + cells(lines[i++]).map((c) => `<td>${c}</td>`).join("") + "</tr>";
+      out.push(html + "</tbody></table>");
+      continue;
+    }
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) { closeList(); const lv = Math.min(5, h[1].length + 2); out.push(`<h${lv}>${inline(h[2])}</h${lv}>`); i++; continue; }
+    const li = /^\s*([-*]|\d+[.)])\s+(.*)$/.exec(line);
+    if (li) {
+      const kind = /\d/.test(li[1]) ? "ol" : "ul";
+      if (list !== kind) { closeList(); out.push(`<${kind}>`); list = kind; }
+      out.push(`<li>${inline(li[2])}</li>`); i++; continue;
+    }
+    if (!line.trim()) { closeList(); i++; continue; }
+    closeList();
+    const para = [line]; i++;
+    while (i < lines.length && lines[i].trim() && !/^(```|#{1,6}\s|\s*([-*]|\d+[.)])\s|\s*\|)/.test(lines[i])) para.push(lines[i++]);
+    out.push(`<p>${inline(para.join(" "))}</p>`);
+  }
+  closeList();
+  return out.join("");
+}
+
+const transcript = []; // for Markdown export
+function addMessage(kind, text, meta) {
+  const div = document.createElement("div");
+  div.className = "msg " + kind;
+  if (meta) { const m = document.createElement("div"); m.className = "meta"; m.textContent = meta; div.appendChild(m); }
+  if (kind === "user" || kind === "error") div.appendChild(document.createTextNode(text));
+  else {
+    const body = document.createElement("div");
+    body.innerHTML = renderMarkdown(text); // safe: renderMarkdown escapes all model text
+    div.appendChild(body);
+    if (kind === "assistant") attachJsonActions(body);
+  }
+  $("log").appendChild(div);
+  div.scrollIntoView({ block: "end", behavior: "smooth" });
+  transcript.push({ kind, text, meta });
+}
+
+/** Offer "Load into editor" on any ```json block in a reply that is a valid control structure. */
+function attachJsonActions(body) {
+  body.querySelectorAll('pre[data-lang="json"]').forEach((pre) => {
+    let obj; try { obj = JSON.parse(pre.textContent); } catch { return; }
+    if (!obj || !Array.isArray(obj.controllers)) return;
+    const check = validateModel(obj);
+    const btn = document.createElement("button");
+    btn.textContent = check.errors.length ? `Has ${check.errors.length} error(s) — load anyway` : "Load into editor";
+    btn.addEventListener("click", () => { if (confirm("Replace the editor contents with this structure? (Save first if you want to keep the current one.)")) setEditor(obj); });
+    pre.after(btn);
+  });
+}
+
+function addProposal({ structure, rationale }) {
+  addMessage("assistant", `**Proposed reconfiguration** — ${rationale}\n\n\`\`\`json\n${JSON.stringify(structure, null, 2)}\n\`\`\``, "propose_reconfiguration");
+}
+
+function renderQuick() {
+  const q = $("quick"); q.replaceChildren();
+  QUICK_ACTIONS.forEach(([label, prompt]) => {
+    const b = document.createElement("button");
+    b.textContent = label; b.title = prompt;
+    b.addEventListener("click", () => send(prompt));
+    q.appendChild(b);
+  });
+}
+
+$("chat").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (busy) { busy.abort(); return; }
+  const t = $("prompt").value; $("prompt").value = ""; send(t);
+});
+$("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("chat").requestSubmit(); });
+$("clearBtn").addEventListener("click", () => { if (busy) busy.abort(); history = []; transcript.length = 0; $("log").replaceChildren(); setStatus(""); });
+$("saveLogBtn").addEventListener("click", () => {
+  const md = [`# STPA analysis — ${currentModel?.system || "untitled"}`, "", `_Exported ${new Date().toISOString()} · ${providerLabel()}_`, "",
+    "## Control structure", "", "```json", JSON.stringify(currentModel, null, 2), "```", "",
+    ...transcript.map((t) => t.kind === "user" ? `## ▶ ${t.text}\n` : `${t.meta ? `_${t.meta}_\n\n` : ""}${t.text}\n`)].join("\n");
+  download("stpa-analysis.md", md, "text/markdown");
+});
+
+/* ── Settings ──────────────────────────────────────────────────────────── */
+const SETTING_FIELDS = ["provider", "claude_key", "claude_model", "claude_effort", "claude_fallbacks", "gemini_key", "gemini_model",
+  "local_endpoint", "local_model", "local_key", "mcp_enabled", "mcp_sse_url", "system_prompt", "remember_keys"];
+const SECRET_FIELDS = ["claude_key", "gemini_key", "local_key"];
+let settings = {};
+
+function loadSettings() {
+  const saved = store.get("settings", {});
+  settings = { provider: "claude", claude_model: DEFAULTS.claude_model, claude_effort: "medium", claude_fallbacks: true,
+    gemini_model: DEFAULTS.gemini_model, local_endpoint: DEFAULTS.local_endpoint, local_model: DEFAULTS.local_model,
+    mcp_enabled: true, system_prompt: DEFAULT_SYSTEM_PROMPT, remember_keys: true, ...saved };
+  SETTING_FIELDS.forEach((k) => {
+    const el = $(k); if (!el) return;
+    if (el.type === "checkbox") el.checked = !!settings[k]; else el.value = settings[k] ?? "";
+  });
+  updateBadge();
+}
+function saveSettings() {
+  SETTING_FIELDS.forEach((k) => { const el = $(k); settings[k] = el.type === "checkbox" ? el.checked : el.value.trim(); });
+  settings.system_prompt = $("system_prompt").value; // keep formatting
+  const persisted = { ...settings };
+  if (!settings.remember_keys) SECRET_FIELDS.forEach((k) => delete persisted[k]);
+  store.set("settings", persisted);
+  updateBadge();
+}
+function updateBadge() { $("modelBadge").textContent = providerLabel(); }
+
+SETTING_FIELDS.forEach((k) => $(k)?.addEventListener("change", saveSettings));
+$("forgetKeys").addEventListener("click", () => {
+  SECRET_FIELDS.forEach((k) => { $(k).value = ""; }); saveSettings(); setStatus("Stored API keys removed.");
+});
+$("resetPrompt").addEventListener("click", () => { $("system_prompt").value = DEFAULT_SYSTEM_PROMPT; saveSettings(); });
+
+const drawer = $("drawer");
+const openDrawer = (open) => { drawer.classList.toggle("open", open); drawer.setAttribute("aria-hidden", String(!open)); if (open) drawer.querySelector("input,select")?.focus(); };
+$("settingsBtn").addEventListener("click", () => openDrawer(!drawer.classList.contains("open")));
+$("closeDrawer").addEventListener("click", () => openDrawer(false));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") openDrawer(false); });
+
+$("themeBtn").addEventListener("click", () => {
+  const dark = document.documentElement.dataset.theme
+    ? document.documentElement.dataset.theme === "dark"
+    : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  store.set("theme", document.documentElement.dataset.theme);
+});
+
+/* ── Boot ─────────────────────────────────────────────────────────────── */
+(function boot() {
+  const theme = store.get("theme"); if (theme) document.documentElement.dataset.theme = theme;
+  loadSettings();
+  renderQuick();
+  setEditor(store.get("structure") || PRESETS["Autonomous Emergency Braking (AEB)"]);
+  addMessage("assistant", "Edit the control structure on the left (or load a preset), pick a provider in **Settings**, then use a quick action or ask a question. The current structure is sent with every request.");
+})();
+</script>
+</body>
+</html>
