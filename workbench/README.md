@@ -8,8 +8,9 @@ Open `index.html` in a browser. It works from `file://` or any static server (fo
 
 ## What it does
 
-- **Editor (left):** a JSON editor for the control structure. It loads presets (AEB, railway level crossing, insulin pump), validates live and draws a layered SVG diagram. Control actions point down; feedback points up as dashed lines.
-  - Validation catches duplicate ids, dangling `source`/`target` references, feedback that doesn't point to a controller, open control loops (a control action with no feedback path back) and controllers without process-model variables.
+- **Editor (left):** a JSON editor for the control structure. It loads presets (AEB, railway level crossing, insulin pump), validates live and draws a layered SVG diagram. Control actions point down; feedback points up as dashed lines. Lines are horizontal or vertical only: each controller pair gets a channel with the control line on the left and the feedback line beside it, and boxes widen so those channels run straight (as in the Penpot UC759 example). Labels move along their line to avoid boxes, other labels and other lines wherever there is room.
+  - Validation catches duplicate ids, dangling `source`/`target` references, feedback that doesn't point to a controller, open control loops (a control action with no feedback path back), controllers without process-model variables, and dangling or malformed `ucas` entries (unknown `control_action`/hazard ids, invalid `type`).
+  - **Safety case (below the diagram):** collapsible tables for Losses, Hazards, Unsafe Control Actions and Safety constraints, generated from the same JSON. Click a row or an id chip to highlight everything it's linked to — losses ↔ hazards ↔ constraints, hazards ↔ UCAs — across all four tables and on the matching control-action line in the diagram.
 - **Analysis (right):** a chat with the selected model. Every request includes the STPA system prompt and the current structure. Quick actions:
   - Identify UCAs
   - Loss scenarios
@@ -30,6 +31,9 @@ Open `index.html` in a browser. It works from `file://` or any static server (fo
   "losses":       [{ "id": "L1", "description": "…" }],
   "hazards":      [{ "id": "H1", "description": "…", "losses": ["L1"] }],
   "constraints":  [{ "id": "SC1", "description": "…", "hazards": ["H1"] }],
+  "ucas":         [{ "id": "UCA-1", "control_action": "ca1",
+                     "type": "not_provided" | "provided_unsafe" | "wrong_timing" | "wrong_duration",
+                     "context": "…", "hazards": ["H1"] }],
   "controllers":  [{ "id": "c1", "name": "…", "level": 0,
                      "process_model": { "variables": ["…"], "assumptions": ["…"] } }],
   "controlled_processes": [{ "id": "p1", "name": "…", "states": ["…"] }],
@@ -38,7 +42,7 @@ Open `index.html` in a browser. It works from `file://` or any static server (fo
 }
 ```
 
-`losses`, `hazards`, `constraints` and `level` are optional. A control action can target another controller, which is how you model hierarchical structures. When `level` is missing, the diagram ranks a controller from the control actions that point at it.
+`losses`, `hazards`, `constraints`, `ucas` and `level` are optional. A control action can target another controller, which is how you model hierarchical structures. When `level` is missing, the diagram ranks a controller from the control actions that point at it. Each `ucas` entry is one of STPA's four unsafe-control-action types for one control action, and `hazards` traces it back to the hazard(s) it can cause.
 
 ## Providers
 
