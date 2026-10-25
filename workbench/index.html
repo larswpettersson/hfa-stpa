@@ -109,6 +109,27 @@
   .legend i { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--brand); vertical-align: middle; margin-right: 4px; }
   .legend i.fb { border-top: 2px dashed var(--info); }
 
+  #diagram [data-id], #diagram [data-ids] { cursor: pointer; }
+  #safetyCaseWrap { border-top: 1px solid var(--border); max-height: 32vh; overflow: auto; }
+  #safetyCaseWrap details { border-bottom: 1px solid var(--border); }
+  #safetyCaseWrap summary { cursor: pointer; padding: 7px 10px; font-size: 13px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 6px; }
+  #safetyCaseWrap summary::-webkit-details-marker { display: none; }
+  #safetyCaseWrap summary::before { content: "▸"; display: inline-block; transition: transform .15s; font-weight: 400; color: var(--fg-muted); }
+  #safetyCaseWrap details[open] summary::before { transform: rotate(90deg); }
+  #safetyCaseWrap summary .n { font-weight: 400; color: var(--fg-muted); font-size: 12px; }
+  #safetyCaseWrap .tblwrap { padding: 0 10px 10px; overflow: auto; }
+  #safetyCaseWrap table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  #safetyCaseWrap th, #safetyCaseWrap td { border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: left; vertical-align: top; }
+  #safetyCaseWrap th { color: var(--fg-muted); font-weight: 600; }
+  #safetyCaseWrap tbody tr { cursor: pointer; }
+  #safetyCaseWrap tbody tr:hover { background: var(--bg-sunken); }
+  #safetyCaseWrap tr.hl { background: var(--brand-subtle); }
+  #safetyCaseWrap tr.dim { opacity: .4; }
+  #safetyCaseWrap .chip { display: inline-block; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px;
+    padding: 0 7px; margin: 1px 3px 1px 0; font-size: 11px; cursor: pointer; }
+  #safetyCaseWrap .chip:hover { border-color: var(--fg-subtle); }
+  #safetyCaseWrap .chip.hl { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+
   #log { flex: 1; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; min-height: 240px; }
   .msg { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; max-width: 100%; overflow-x: auto; }
   .msg.user { background: var(--brand-subtle); align-self: flex-end; max-width: 90%; white-space: pre-wrap; }
@@ -183,6 +204,24 @@
       </span>
     </div>
     <div id="diagramWrap"><svg id="diagram" role="img" aria-label="Control structure diagram"></svg></div>
+    <div id="safetyCaseWrap">
+      <details id="scLosses" open>
+        <summary>Losses <span class="n" id="scLossesCount">0</span></summary>
+        <div class="tblwrap"><table><thead><tr><th>ID</th><th>Description</th></tr></thead><tbody id="scLossesBody"></tbody></table></div>
+      </details>
+      <details id="scHazards" open>
+        <summary>Hazards <span class="n" id="scHazardsCount">0</span></summary>
+        <div class="tblwrap"><table><thead><tr><th>ID</th><th>Description</th><th>Losses</th></tr></thead><tbody id="scHazardsBody"></tbody></table></div>
+      </details>
+      <details id="scUcas">
+        <summary>Unsafe Control Actions <span class="n" id="scUcasCount">0</span></summary>
+        <div class="tblwrap"><table><thead><tr><th>ID</th><th>Type</th><th>Control action</th><th>Context</th><th>Hazards</th></tr></thead><tbody id="scUcasBody"></tbody></table></div>
+      </details>
+      <details id="scConstraints" open>
+        <summary>Safety constraints <span class="n" id="scConstraintsCount">0</span></summary>
+        <div class="tblwrap"><table><thead><tr><th>ID</th><th>Description</th><th>Hazards</th></tr></thead><tbody id="scConstraintsBody"></tbody></table></div>
+      </details>
+    </div>
   </section>
 
   <!-- ───────────── Right: analysis chat ───────────── -->
@@ -283,6 +322,8 @@ const $ = (id) => document.getElementById(id);
    Schema (all arrays optional except controllers/controlled_processes):
      system, losses[{id,description}], hazards[{id,description,losses[]}],
      constraints[{id,description,hazards[]}],
+     ucas[{id,control_action,type,context,hazards[]}]
+       (type: not_provided | provided_unsafe | wrong_timing | wrong_duration),
      controllers[{id,name,level?,process_model:{variables[],assumptions[]}}],
      controlled_processes[{id,name,states[]}],
      control_actions[{id,source,target,action,parameters[]}],
@@ -322,6 +363,12 @@ const PRESETS = {
       { id: "fb0", source: "c1", target: "c0", signal: "AEB warning chime / HMI status", latency_tolerance_ms: 200 },
       { id: "fb1", source: "p1", target: "c1", signal: "WheelSpeedSensorData", latency_tolerance_ms: 20 },
       { id: "fb2", source: "p1", target: "c0", signal: "Felt deceleration", latency_tolerance_ms: 500 }
+    ],
+    ucas: [
+      { id: "UCA-1", control_action: "ca1", type: "not_provided", context: "an obstacle is within braking distance and time-to-collision is below the threshold", hazards: ["H1"] },
+      { id: "UCA-2", control_action: "ca1", type: "provided_unsafe", context: "no obstacle is present (false positive detection)", hazards: ["H2"] },
+      { id: "UCA-3", control_action: "ca1", type: "wrong_timing", context: "braking is applied after time-to-collision has already passed the threshold", hazards: ["H1"] },
+      { id: "UCA-4", control_action: "ca1", type: "wrong_duration", context: "braking continues after the obstacle has been cleared", hazards: ["H2"] }
     ]
   },
 
@@ -364,6 +411,10 @@ const PRESETS = {
       { id: "fb3", source: "p2", target: "c2", signal: "Track circuit / axle counter occupancy", latency_tolerance_ms: 300 },
       { id: "fb4", source: "c2", target: "c3", signal: "Crossing protection signal aspect", latency_tolerance_ms: 1000 },
       { id: "fb5", source: "p2", target: "c3", signal: "Speed indication (DMI)", latency_tolerance_ms: 500 }
+    ],
+    ucas: [
+      { id: "UCA-1", control_action: "ca2", type: "not_provided", context: "a train is approaching and the crossing has not been closed", hazards: ["H1"] },
+      { id: "UCA-2", control_action: "ca3", type: "wrong_timing", context: "barriers are raised before the train has cleared the crossing", hazards: ["H1"] }
     ]
   },
 
@@ -388,6 +439,10 @@ const PRESETS = {
     feedback: [
       { id: "fb1", source: "p1", target: "c2", signal: "CGM glucose reading", latency_tolerance_ms: 300000 },
       { id: "fb2", source: "c2", target: "c1", signal: "Alerts and dose history", latency_tolerance_ms: 60000 }
+    ],
+    ucas: [
+      { id: "UCA-1", control_action: "ca2", type: "provided_unsafe", context: "glucose is below 70 mg/dL", hazards: ["H1"] },
+      { id: "UCA-2", control_action: "ca2", type: "not_provided", context: "glucose has been above target for a prolonged period", hazards: ["H2"] }
     ]
   }
 };
@@ -413,7 +468,7 @@ function validateModel(m) {
   const arr = (k) => Array.isArray(m[k]) ? m[k] : (m[k] === undefined ? [] : (errors.push(`"${k}" must be an array`), []));
   const controllers = arr("controllers"), processes = arr("controlled_processes");
   const cas = arr("control_actions"), fbs = arr("feedback");
-  const losses = arr("losses"), hazards = arr("hazards"), constraints = arr("constraints");
+  const losses = arr("losses"), hazards = arr("hazards"), constraints = arr("constraints"), ucas = arr("ucas");
   if (!m.system) warnings.push(`Missing "system" name`);
   if (!controllers.length) errors.push("At least one controller is required");
   if (!processes.length) warnings.push("No controlled processes defined");
@@ -427,7 +482,7 @@ function validateModel(m) {
   });
   reg("controllers", controllers); reg("controlled_processes", processes);
   reg("control_actions", cas); reg("feedback", fbs);
-  reg("losses", losses); reg("hazards", hazards); reg("constraints", constraints);
+  reg("losses", losses); reg("hazards", hazards); reg("constraints", constraints); reg("ucas", ucas);
 
   const isCtrl = (id) => ids.get(id) === "controllers";
   const isNode = (id) => isCtrl(id) || ids.get(id) === "controlled_processes";
@@ -446,6 +501,16 @@ function validateModel(m) {
   });
   hazards.forEach((h) => (h.losses || []).forEach((l) => { if (ids.get(l) !== "losses") warnings.push(`Hazard ${h.id} references unknown loss "${l}"`); }));
   constraints.forEach((c) => (c.hazards || []).forEach((h) => { if (ids.get(h) !== "hazards") warnings.push(`Constraint ${c.id} references unknown hazard "${h}"`); }));
+  const UCA_TYPES = ["not_provided", "provided_unsafe", "wrong_timing", "wrong_duration"];
+  ucas.forEach((u) => {
+    if (!u || !u.id) return;
+    if (!u.control_action) errors.push(`UCA ${u.id} is missing "control_action"`);
+    else if (!cas.some((c) => c && c.id === u.control_action)) errors.push(`UCA ${u.id}: control_action "${u.control_action}" does not exist`);
+    if (!u.type) warnings.push(`UCA ${u.id} has no "type"`);
+    else if (!UCA_TYPES.includes(u.type)) errors.push(`UCA ${u.id}: type "${u.type}" must be one of ${UCA_TYPES.join(", ")}`);
+    if (!u.context) warnings.push(`UCA ${u.id} has no "context"`);
+    (u.hazards || []).forEach((h) => { if (ids.get(h) !== "hazards") warnings.push(`UCA ${u.id} references unknown hazard "${h}"`); });
+  });
 
   // STPA hints: every control action should have a feedback path closing the loop.
   cas.forEach((ca) => {
@@ -784,15 +849,21 @@ function renderDiagram(m) {
 
   const edgeLayer = svgEl("g", {}), labelLayer = svgEl("g", {}), nodeLayer = svgEl("g", {});
   routes.forEach(({ g, pts }) => {
-    const path = svgEl("path", { d: "M" + pts.map((p) => p.join(",")).join(" L"), class: g.type, "marker-end": `url(#ah-${g.type})` });
+    const attrs = { d: "M" + pts.map((p) => p.join(",")).join(" L"), class: g.type, "marker-end": `url(#ah-${g.type})` };
+    if (g.type === "ca") attrs["data-ids"] = g.edges.map(({ e }) => e.id).join(",");
+    const path = svgEl("path", attrs);
     if (edgeKinds[g.type]) applyStyle(path, edgeKinds[g.type].css);
     path.appendChild(svgEl("title", {}, g.edges.map(({ e }) => `${e.id}: ${g.type === "ca" ? e.action : e.signal} (${e.source} → ${e.target})`).join("\n")));
+    if (g.type === "ca") path.addEventListener("click", () => setFocus(g.edges[0].e.id));
     edgeLayer.appendChild(path);
   });
   labels.forEach(({ type, label, e, r }) => {
-    const lbl = svgEl("text", { x: r.x, y: r.y + r.h - 3, class: "lbl-" + type }, label);
+    const attrs = { x: r.x, y: r.y + r.h - 3, class: "lbl-" + type };
+    if (type === "ca") attrs["data-id"] = e.id;
+    const lbl = svgEl("text", attrs, label);
     if (edgeKinds[type]) applyStyle(lbl, { fill: edgeKinds[type].color });
     lbl.appendChild(svgEl("title", {}, `${e.id}: ${type === "ca" ? e.action : e.signal}`));
+    if (type === "ca") lbl.addEventListener("click", () => setFocus(e.id));
     labelLayer.appendChild(lbl);
   });
   nodes.forEach(({ x, y, w, h, n }) => {
@@ -810,6 +881,135 @@ function renderDiagram(m) {
   });
   root.append(edgeLayer, nodeLayer, labelLayer);
   $("counts").textContent = `${ctrls.length} controllers · ${procs.length} processes · ${cas.length} CAs · ${fbs.length} feedback`;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3b. Safety-case tables — losses, hazards, UCAs, safety constraints
+   Read-only tables generated from the model, in collapsible <details> sections.
+   Clicking a row or an id "chip" focuses that id and highlights everything
+   reachable from it over an undirected graph built from the reference arrays
+   (hazard→loss, constraint→hazard, uca→hazard, uca→control_action) — both in
+   these tables and on the matching control-action line in the diagram above.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const UCA_TYPE_LABELS = {
+  not_provided: "Not provided", provided_unsafe: "Provided (unsafe)",
+  wrong_timing: "Wrong timing / order", wrong_duration: "Wrong duration",
+};
+
+/* Directed: fwd[child] = the ids that child references ("traces up to"); bwd[parent] = the ids
+   that reference parent ("traces down to"). Kept directed (rather than one undirected graph) so
+   that two siblings which merely reference the same ancestor — e.g. two hazards tracing to the
+   same top-level loss — don't pull each other's whole chain into the highlight. */
+function buildLinkGraph(m) {
+  const fwd = new Map(), bwd = new Map();
+  const link = (child, parent) => {
+    if (!child || !parent) return;
+    if (!fwd.has(child)) fwd.set(child, new Set());
+    fwd.get(child).add(parent);
+    if (!bwd.has(parent)) bwd.set(parent, new Set());
+    bwd.get(parent).add(child);
+  };
+  (m.hazards || []).forEach((h) => h && h.id && (h.losses || []).forEach((l) => link(h.id, l)));
+  (m.constraints || []).forEach((c) => c && c.id && (c.hazards || []).forEach((h) => link(c.id, h)));
+  (m.ucas || []).forEach((u) => { if (!u || !u.id) return; (u.hazards || []).forEach((h) => link(u.id, h)); if (u.control_action) link(u.id, u.control_action); });
+  return { fwd, bwd };
+}
+function closure(map, start) {
+  const seen = new Set([start]), queue = [start];
+  while (queue.length) {
+    const cur = queue.shift();
+    (map.get(cur) || []).forEach((n) => { if (!seen.has(n)) { seen.add(n); queue.push(n); } });
+  }
+  return seen;
+}
+/* What `start` traces up to (its ancestors) union what traces down to it (its descendants) —
+   not a full undirected BFS, so unrelated siblings sharing a distant ancestor stay unhighlighted. */
+function connectedSet(graph, start) {
+  const up = closure(graph.fwd, start), down = closure(graph.bwd, start);
+  return new Set([...up, ...down]);
+}
+
+let linkGraph = { fwd: new Map(), bwd: new Map() }, focusId = null;
+
+function chipList(items) {
+  const span = document.createElement("span");
+  items.forEach((it) => {
+    const chip = document.createElement("span");
+    chip.className = "chip"; chip.textContent = it.label ?? it.id; chip.dataset.id = it.id;
+    chip.addEventListener("click", (e) => { e.stopPropagation(); setFocus(it.id); });
+    span.appendChild(chip);
+  });
+  return span;
+}
+function buildScTable(tbodyId, rows, cols) {
+  const tbody = $(tbodyId); tbody.replaceChildren();
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    tr.dataset.id = row.id;
+    tr.addEventListener("click", () => setFocus(row.id));
+    cols.forEach((render) => { const td = document.createElement("td"); render(td, row); tr.appendChild(td); });
+    tbody.appendChild(tr);
+  });
+}
+
+function renderSafetyCase(m) {
+  linkGraph = buildLinkGraph(m);
+  focusId = null;
+  const losses = (m.losses || []).filter((x) => x && x.id);
+  const hazards = (m.hazards || []).filter((x) => x && x.id);
+  const constraints = (m.constraints || []).filter((x) => x && x.id);
+  const ucas = (m.ucas || []).filter((x) => x && x.id);
+  const caLabel = (id) => { const ca = (m.control_actions || []).find((c) => c && c.id === id); return ca ? `${ca.action || ca.id} (${id})` : id; };
+
+  $("scLossesCount").textContent = losses.length;
+  buildScTable("scLossesBody", losses, [
+    (td, r) => { td.textContent = r.id; },
+    (td, r) => { td.textContent = r.description || ""; },
+  ]);
+
+  $("scHazardsCount").textContent = hazards.length;
+  buildScTable("scHazardsBody", hazards, [
+    (td, r) => { td.textContent = r.id; },
+    (td, r) => { td.textContent = r.description || ""; },
+    (td, r) => { td.appendChild(chipList((r.losses || []).map((id) => ({ id })))); },
+  ]);
+
+  $("scUcasCount").textContent = ucas.length;
+  buildScTable("scUcasBody", ucas, [
+    (td, r) => { td.textContent = r.id; },
+    (td, r) => { td.textContent = UCA_TYPE_LABELS[r.type] || r.type || ""; },
+    (td, r) => { if (r.control_action) td.appendChild(chipList([{ id: r.control_action, label: caLabel(r.control_action) }])); },
+    (td, r) => { td.textContent = r.context || ""; },
+    (td, r) => { td.appendChild(chipList((r.hazards || []).map((id) => ({ id })))); },
+  ]);
+
+  $("scConstraintsCount").textContent = constraints.length;
+  buildScTable("scConstraintsBody", constraints, [
+    (td, r) => { td.textContent = r.id; },
+    (td, r) => { td.textContent = r.description || ""; },
+    (td, r) => { td.appendChild(chipList((r.hazards || []).map((id) => ({ id })))); },
+  ]);
+
+  applyFocus();
+}
+
+function setFocus(id) { focusId = focusId === id ? null : id; applyFocus(); }
+function applyFocus() {
+  const connected = focusId ? connectedSet(linkGraph, focusId) : null;
+  document.querySelectorAll("#safetyCaseWrap tr[data-id]").forEach((tr) => {
+    tr.classList.toggle("hl", !!connected && connected.has(tr.dataset.id));
+    tr.classList.toggle("dim", !!connected && !connected.has(tr.dataset.id));
+  });
+  document.querySelectorAll("#safetyCaseWrap .chip").forEach((chip) => {
+    chip.classList.toggle("hl", !!connected && connected.has(chip.dataset.id));
+  });
+  document.querySelectorAll("#diagram [data-id]").forEach((el) => {
+    el.style.opacity = !connected ? "" : connected.has(el.dataset.id) ? "1" : ".3";
+  });
+  document.querySelectorAll("#diagram [data-ids]").forEach((el) => {
+    const on = connected && el.dataset.ids.split(",").some((x) => connected.has(x));
+    el.style.opacity = !connected ? "" : on ? "1" : ".3";
+  });
 }
 
 /* ── Editor wiring ───────────────────────────────────────────────────────── */
@@ -831,6 +1031,7 @@ function refreshEditor() {
     currentModel = model;
     if (!lastValidation.warnings.length) add("ok", "✓ Structure is valid and every control action has a feedback path");
     renderDiagram(model);
+    renderSafetyCase(model);
   }
 }
 function setEditor(obj) { $("editor").value = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); refreshEditor(); }
@@ -1117,7 +1318,9 @@ Rules:
 - Reference elements by their JSON ids (c1, ca2, fb3, H1…). Do not invent components without labelling them "proposed".
 - Prefer Markdown tables for UCA lists: columns Control action | Not provided | Provided | Too early/late/order | Too long/short.
 - Be concise and specific; state uncertainty instead of guessing.
-- If you propose a reconfigured structure, give the complete JSON in one \`\`\`json block using the same schema.`;
+- If you propose a reconfigured structure, give the complete JSON in one \`\`\`json block using the same schema, including any new UCAs under
+  "ucas": [{"id": "UCA-n", "control_action": "<control_action id>", "type": "not_provided" | "provided_unsafe" | "wrong_timing" | "wrong_duration", "context": "…", "hazards": ["H#"]}]
+  so they appear in the editor's UCA table alongside the losses, hazards and constraints.`;
 
 const TOOL_PROMPT = (tools) => `
 
@@ -1584,6 +1787,11 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden && pe
   const theme = store.get("theme"); if (theme) document.documentElement.dataset.theme = theme;
   loadSettings();
   renderQuick();
+  ["scLosses", "scHazards", "scUcas", "scConstraints"].forEach((id) => {
+    const el = $(id), saved = store.get("open:" + id);
+    if (saved !== null) el.open = saved;
+    el.addEventListener("toggle", () => store.set("open:" + id, el.open));
+  });
   setEditor(store.get("structure") || PRESETS["Autonomous Emergency Braking (AEB)"]);
   penpotFollow(!!store.get("penpotFollow"));
   addMessage("assistant", "Edit the control structure on the left (or load a preset), pick a provider in **Settings**, then use a quick action or ask a question. The current structure is sent with every request.");
