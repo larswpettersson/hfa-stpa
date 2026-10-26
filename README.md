@@ -2,6 +2,8 @@
 
 **🔗 Live workbench: [larswpettersson.github.io/hfa-stpa/workbench/](https://larswpettersson.github.io/hfa-stpa/workbench/)**
 
+📖 Workbench docs: [workbench/README.md](https://github.com/larswpettersson/hfa-stpa/blob/main/workbench/README.md)
+
 This repository supports **STPA** (System-Theoretic Process Analysis) work for HFA safety and systems engineering: documenting control structures, unsafe control actions (UCAs), loss scenarios, and countermeasures.
 
 STPA complements other HFA analysis artifacts (e.g. [Bowtie](https://github.com/larswpettersson/hfa-bowtie), [RBD](https://github.com/larswpettersson/hfa-rbd), [HTA Tool](https://github.com/larswpettersson/hfa-hta)) by focusing on feedback loops, controllers, and systemic causes of unsafe behavior rather than component failure alone.
@@ -12,7 +14,7 @@ STPA complements other HFA analysis artifacts (e.g. [Bowtie](https://github.com/
 |------|---------|
 | `docs/` | Reference material, workshop notes, exported diagrams |
 | `analysis/` | STPA models and working artifacts (control diagrams, UCA tables, scenarios) |
-| `workbench/` | Single-file STPA control-structure editor with LLM analysis. See [workbench/README.md](workbench/README.md#run) for how to run it |
+| `workbench/` | Single-file STPA control-structure editor with LLM analysis. See [workbench/README.md](https://github.com/larswpettersson/hfa-stpa/blob/main/workbench/README.md#run) for how to run it |
 
 ## Design system
 
@@ -60,7 +62,7 @@ Routed diagram links are **paths** (solid = control, dashed = information) with 
 
 ## Getting started
 
-- **Use the workbench:** open the [live version](https://larswpettersson.github.io/hfa-stpa/workbench/), or see [workbench/README.md](workbench/README.md#run) to run it offline.
+- **Use the workbench:** open the [live version](https://larswpettersson.github.io/hfa-stpa/workbench/), or see [workbench/README.md](https://github.com/larswpettersson/hfa-stpa/blob/main/workbench/README.md#run) to run it offline.
 - **Add analysis work:** put control-structure and UCA artifacts under `analysis/`. Keep sensitive or environment-specific values out of git.
 
 ## Related projects
