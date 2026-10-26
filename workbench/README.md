@@ -19,7 +19,11 @@ Open `index.html` in a browser. It works from `file://` or any static server (fo
   - Suggest reconfiguration
   - Safety constraints
 
-  Any JSON structure the model proposes gets a **Load into editor** button. You can export the conversation as Markdown.
+  Any JSON structure the model proposes gets a **Load into editor** button, and a structure *patch* gets **Apply to editor**. You can export the conversation as Markdown.
+- **Selection and scope:** Shift+click process blocks (controllers, processes, actuators, sensors), control actions or feedback in the diagram to select them. Hover and selected follow the Penpot *Process Block* variants: Hovered has a 4/4 drop shadow, Selected has a 4 px halo. The bar under the diagram lists the selection. When something is selected, each question still sends the whole structure as context, but tells the model to focus on the selected elements and to return changes as a patch.
+- **Standalone questions:** each question is sent with the structure and its scope only, not the earlier chat. Tick **Send earlier turns** above the chat for follow-ups that need it.
+- **Model per question:** the picker beside **Send** lists the provider's models (Claude: Fable, Opus, Sonnet and Haiku with their versions). The next question uses the model you pick. Each answer shows the model, the time and the token counts.
+- **Actuators and sensors:** select control actions that end at a controlled process and press **Convert to actuator**. The tool inserts an actuator (controller → actuator → process). **Convert to sensor** does the same for feedback that starts at a process (process → sensor → controller). The control-action and feedback ids stay the same, so UCAs keep their links. Ctrl/⌘+Z in the editor undoes a conversion or an applied patch.
 - **Follow Penpot selection:** the diagram copies the style of whatever is selected in Penpot and keeps updating while the link is on (see [Penpot live style](#penpot-live-style)).
 - **Settings drawer:** holds the API key, model and endpoint for each provider, plus Claude effort and refusal fallback, MCP options, an editable system prompt and key storage.
 
@@ -38,9 +42,21 @@ Open `index.html` in a browser. It works from `file://` or any static server (fo
                      "process_model": { "variables": ["…"], "assumptions": ["…"] } }],
   "controlled_processes": [{ "id": "p1", "name": "…", "states": ["…"] }],
   "control_actions": [{ "id": "ca1", "source": "c1", "target": "p1", "action": "…", "parameters": ["…"] }],
-  "feedback":        [{ "id": "fb1", "source": "p1", "target": "c1", "signal": "…", "latency_tolerance_ms": 20 }]
+  "feedback":        [{ "id": "fb1", "source": "p1", "target": "c1", "signal": "…", "latency_tolerance_ms": 20 }],
+  "actuators": [{ "id": "a1", "name": "…", "target": "p1", "actuation": "…", "converted_from": "ca1" }],
+  "sensors":   [{ "id": "s1", "name": "…", "source": "p1", "measures": "…",  "converted_from": "fb1" }]
 }
 ```
+
+A control action can target an actuator, and feedback can come from a sensor. The actuator acts on its `target` process and the sensor measures its `source` process, so the loop counts as closed. The diagram puts actuators and sensors in a row between the controllers and the processes.
+
+**Patches.** To save output tokens, the model is asked to return only what changes:
+
+```json
+{ "patch": true, "controlled_processes": [{ "id": "p1", "name": "Vehicle Braking System" }], "remove": ["ca2"] }
+```
+
+An element whose id already exists is merged into that element. A new id is added, and ids listed in `remove` are deleted.
 
 `losses`, `hazards`, `constraints`, `ucas` and `level` are optional. A control action can target another controller, which is how you model hierarchical structures. When `level` is missing, the diagram ranks a controller from the control actions that point at it. Each `ucas` entry is one of STPA's four unsafe-control-action types for one control action, and `hazards` traces it back to the hazard(s) it can cause.
 
@@ -48,7 +64,7 @@ Open `index.html` in a browser. It works from `file://` or any static server (fo
 
 | Provider | Endpoint | Notes |
 |---|---|---|
-| Claude | `https://api.anthropic.com/v1/messages` | Sends `anthropic-dangerous-direct-browser-access: true`. Default model `claude-opus-5-5`. Server-side refusal fallback is on by default (`anthropic-beta: server-side-fallback-2026-07-01`, `fallbacks: "default"`). |
+| Claude | `https://api.anthropic.com/v1/messages` | Sends `anthropic-dangerous-direct-browser-access: true`. Default model `claude-opus-5-5`. Streams the response; **Max output tokens** (default 64000) is capped at the model's limit. Effort is sent only to models that accept it, and server-side refusal fallback (`fallbacks: "default"`) only to Fable 5.1, Opus 5.5, Opus 5 and Sonnet 5.5. The system prompt and structure are prompt-cached. |
 | Gemini | `…/v1beta/models/{model}:generateContent` | The key goes in the `x-goog-api-key` header, not the URL. |
 | Local | `http://localhost:11434/v1/chat/completions` | The endpoint path picks the format: OpenAI-compatible, or Ollama native `/api/chat` or `/api/generate`. For Ollama from `file://`, start it with `OLLAMA_ORIGINS=*`. |
 

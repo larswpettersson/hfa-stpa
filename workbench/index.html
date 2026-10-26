@@ -26,6 +26,8 @@
     --info: #007FFF; --success: #228B22; --warning: #B38600; --error: #C70039;
     --bg-error: #FBE3E8; --bg-warning: #FFF6D6; --bg-success: #E3F3E8;
     --border: #D0D7DE; --radius: 6px;
+    /* Process Block states from the Penpot library: Hovered = 4/4 drop shadow, Selected = spread-4 halo */
+    --shadow-hover: rgba(0,0,0,.2); --shadow-sel: rgba(0,0,0,.2);
     --font: "Source Sans 3", "Source Sans Pro", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     color-scheme: light;
@@ -38,6 +40,7 @@
       --info: #58A6FF; --success: #3FB950; --warning: #FFC300; --error: #E03E3E;
       --bg-error: #602A36; --bg-warning: #6B5414; --bg-success: #1A5A42;
       --border: #4A515B; color-scheme: dark;
+      --shadow-hover: rgba(0,0,0,.55); --shadow-sel: rgba(250,251,252,.35);
     }
   }
   :root[data-theme="dark"] {
@@ -47,6 +50,7 @@
     --info: #58A6FF; --success: #3FB950; --warning: #FFC300; --error: #E03E3E;
     --bg-error: #602A36; --bg-warning: #6B5414; --bg-success: #1A5A42;
     --border: #4A515B; color-scheme: dark;
+    --shadow-hover: rgba(0,0,0,.55); --shadow-sel: rgba(250,251,252,.35);
   }
 
   * { box-sizing: border-box; }
@@ -89,10 +93,14 @@
   #issues .warn { background: var(--bg-warning); }
   #issues .ok { background: var(--bg-success); }
   #diagramWrap { border-top: 1px solid var(--border); overflow: auto; min-height: 200px; max-height: 46vh; background: var(--bg); }
-  #diagram { display: block; }
+  #diagram { display: block; user-select: none; -webkit-user-select: none; }
   #diagram .node rect { stroke-width: 1.5; }
   #diagram .ctrl rect { fill: var(--bg-elev); stroke: var(--brand); }
   #diagram .proc rect { fill: var(--bg-sunken); stroke: var(--fg-muted); }
+  #diagram .act rect, #diagram .sens rect { fill: var(--bg-elev); stroke: var(--fg); stroke-width: 1; }
+  #diagram .node[data-sel]:hover rect, #diagram path[data-sel]:hover, #diagram text[data-sel]:hover { filter: drop-shadow(4px 4px 4px var(--shadow-hover)); }
+  #diagram .node.sel rect, #diagram path.sel, #diagram text.sel { filter: url(#sel-halo); }
+  #diagram .node.sel[data-sel]:hover rect, #diagram path.sel:hover, #diagram text.sel:hover { filter: url(#sel-halo) drop-shadow(4px 4px 4px var(--shadow-hover)); }
   #diagram text { fill: var(--fg); font: 12px var(--font); }
   #diagram .sub { fill: var(--fg-muted); font-size: 10.5px; }
   #diagram .ca { stroke: var(--brand); fill: none; stroke-width: 1.5; }
@@ -104,7 +112,15 @@
   .legend i { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--brand); vertical-align: middle; margin-right: 4px; }
   .legend i.fb { border-top: 2px dashed var(--info); }
 
-  #diagram [data-id], #diagram [data-ids] { cursor: pointer; }
+  #diagram [data-id], #diagram [data-ids], #diagram [data-sel] { cursor: pointer; }
+  #selBar { display: flex; gap: 6px; row-gap: 4px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--fg-muted); padding: 4px 10px 6px; border-top: 1px solid var(--border); }
+  #selBar button { padding: 2px 8px; font-size: 12px; }
+  .selchip { display: inline-flex; align-items: center; gap: 2px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px; padding: 0 2px 0 8px; color: var(--fg); }
+  .selchip button { border: 0; background: none; padding: 0 5px; font-size: 12px; line-height: 18px; color: var(--fg-muted); }
+  #scopeLine { font-size: 12px; color: var(--fg-muted); padding: 6px 10px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  #scopeLine strong { color: var(--fg); font-weight: 600; }
+  #scopeLine label { display: inline-flex; gap: 4px; align-items: center; margin-left: auto; }
+  #modelPick { max-width: 210px; }
   #safetyCaseWrap { border-top: 1px solid var(--border); max-height: 32vh; overflow: auto; }
   #safetyCaseWrap details { border-bottom: 1px solid var(--border); }
   #safetyCaseWrap summary { cursor: pointer; padding: 7px 10px; font-size: 13px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 6px; }
@@ -184,7 +200,6 @@
       <option value="gemini">Google Gemini</option>
       <option value="local">Local (Ollama / LM Studio / LocalAI)</option>
     </select>
-    <span id="modelBadge" class="pill" title="Model (change in Settings)"></span>
     <button id="themeBtn" title="Toggle light/dark theme">Theme</button>
     <button id="settingsBtn" class="primary">Settings</button>
   </div>
@@ -207,6 +222,7 @@
       <span><i id="swatchCa"></i>Control action</span><span><i class="fb" id="swatchFb"></i>Feedback</span><span id="counts"></span>
     </div>
     <div id="diagramWrap"><svg id="diagram" role="img" aria-label="Control structure diagram"></svg></div>
+    <div id="selBar" aria-live="polite"></div>
     <div id="safetyCaseWrap">
       <details id="scLosses" open>
         <summary>Losses <span class="n" id="scLossesCount">0</span></summary>
@@ -236,10 +252,15 @@
       <button id="toolsBtn" type="button" title="Show or hide the tool-call rows in the chat">Hide tool calls</button>
     </div>
     <div class="quick" id="quick"></div>
+    <div id="scopeLine">
+      <span id="scopeText"></span>
+      <label title="Off: each question is sent with the control structure and the selection only. On: earlier questions and answers are sent too (more tokens)."><input type="checkbox" id="keep_history"> Send earlier turns</label>
+    </div>
     <div id="log" aria-live="polite"></div>
     <div class="status" id="status"></div>
     <form id="chat">
       <textarea id="prompt" placeholder="Ask about the control structure… (Ctrl/⌘+Enter to send)" aria-label="Message"></textarea>
+      <select id="modelPick" aria-label="Model for the next question" title="Model for the next question"></select>
       <button type="submit" class="primary" id="sendBtn">Send</button>
     </form>
   </section>
@@ -253,13 +274,13 @@
     <legend>Anthropic Claude</legend>
     <label>API key <input type="password" id="claude_key" autocomplete="off" placeholder="sk-ant-…"></label>
     <label>Model <input type="text" id="claude_model" list="claudeModels"></label>
-    <datalist id="claudeModels">
-      <option value="claude-opus-5-5"><option value="claude-sonnet-5-5"><option value="claude-haiku-5-5"><option value="claude-fable-5-1">
-    </datalist>
+    <datalist id="claudeModels"></datalist>
+    <label>Max output tokens <input type="number" id="claude_max_tokens" min="1024" max="128000" step="1024"></label>
     <label>Effort
       <select id="claude_effort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select>
     </label>
     <label class="inline"><input type="checkbox" id="claude_fallbacks" checked> Server-side refusal fallback (<code>fallbacks: "default"</code>)</label>
+    <p class="hint">Responses stream, so long answers do not time out; the limit is capped at what the chosen model allows. Effort and fallback are only sent to models that accept them.</p>
     <p class="hint">Calls api.anthropic.com directly from the browser with <code>anthropic-dangerous-direct-browser-access</code>. Your key is visible to anyone using this browser profile — use a restricted key.</p>
   </fieldset>
 
@@ -324,8 +345,12 @@ const $ = (id) => document.getElementById(id);
      controllers[{id,name,level?,process_model:{variables[],assumptions[]}}],
      controlled_processes[{id,name,states[]}],
      control_actions[{id,source,target,action,parameters[]}],
-     feedback[{id,source,target,signal,latency_tolerance_ms?}]
-   A control action may target another controller (hierarchical structures).
+     feedback[{id,source,target,signal,latency_tolerance_ms?}],
+     actuators[{id,name,target,actuation?,converted_from?}]   (target: a controlled process),
+     sensors[{id,name,source,measures?,converted_from?}]       (source: a controlled process)
+   A control action may target another controller (hierarchical structures) or an
+   actuator; feedback may come from a sensor. The actuator then acts on its target
+   process and the sensor measures its source process, which closes the loop.
    ═══════════════════════════════════════════════════════════════════════════ */
 const PRESETS = {
   "Autonomous Emergency Braking (AEB)": {
@@ -466,6 +491,7 @@ function validateModel(m) {
   const controllers = arr("controllers"), processes = arr("controlled_processes");
   const cas = arr("control_actions"), fbs = arr("feedback");
   const losses = arr("losses"), hazards = arr("hazards"), constraints = arr("constraints"), ucas = arr("ucas");
+  const actuators = arr("actuators"), sensors = arr("sensors");
   if (!m.system) warnings.push(`Missing "system" name`);
   if (!controllers.length) errors.push("At least one controller is required");
   if (!processes.length) warnings.push("No controlled processes defined");
@@ -480,9 +506,21 @@ function validateModel(m) {
   reg("controllers", controllers); reg("controlled_processes", processes);
   reg("control_actions", cas); reg("feedback", fbs);
   reg("losses", losses); reg("hazards", hazards); reg("constraints", constraints); reg("ucas", ucas);
+  reg("actuators", actuators); reg("sensors", sensors);
 
   const isCtrl = (id) => ids.get(id) === "controllers";
-  const isNode = (id) => isCtrl(id) || ids.get(id) === "controlled_processes";
+  const isProc = (id) => ids.get(id) === "controlled_processes";
+  const isNode = (id) => ["controllers", "controlled_processes", "actuators", "sensors"].includes(ids.get(id));
+  actuators.forEach((a) => {
+    if (!a || !a.id) return;
+    if (!isProc(a.target)) errors.push(`Actuator ${a.id}: target "${a.target}" is not a controlled process`);
+    if (!cas.some((ca) => ca && ca.target === a.id)) warnings.push(`Actuator "${a.name || a.id}" receives no control actions`);
+  });
+  sensors.forEach((s) => {
+    if (!s || !s.id) return;
+    if (!isProc(s.source)) errors.push(`Sensor ${s.id}: source "${s.source}" is not a controlled process`);
+    if (!fbs.some((fb) => fb && fb.source === s.id)) warnings.push(`Sensor "${s.name || s.id}" sends no feedback`);
+  });
   cas.forEach((ca) => {
     if (!ca || !ca.id) return;
     if (!isCtrl(ca.source)) errors.push(`Control action ${ca.id}: source "${ca.source}" is not a controller`);
@@ -509,19 +547,30 @@ function validateModel(m) {
     (u.hazards || []).forEach((h) => { if (ids.get(h) !== "hazards") warnings.push(`UCA ${u.id} references unknown hazard "${h}"`); });
   });
 
-  // STPA hints: every control action should have a feedback path closing the loop.
+  // STPA hints: every control action should have a feedback path closing the loop (through an actuator/sensor pair, if any).
+  const { acted, measured } = loopEnds(m);
   cas.forEach((ca) => {
     if (!ca || !isCtrl(ca.source) || !isNode(ca.target)) return;
-    if (!fbs.some((fb) => fb && fb.source === ca.target && fb.target === ca.source))
-      warnings.push(`Open loop: no feedback from "${ca.target}" to "${ca.source}" for ${ca.id} (${ca.action})`);
+    if (!fbs.some((fb) => fb && fb.target === ca.source && (fb.source === ca.target || measured(fb.source) === acted(ca.target))))
+      warnings.push(`Open loop: no feedback from "${acted(ca.target)}" to "${ca.source}" for ${ca.id} (${ca.action})`);
   });
-  processes.forEach((p) => { if (p && p.id && !cas.some((ca) => ca && ca.target === p.id)) warnings.push(`Process "${p.name || p.id}" receives no control actions`); });
+  processes.forEach((p) => {
+    if (p && p.id && !cas.some((ca) => ca && ca.target === p.id) && !actuators.some((a) => a && a.target === p.id))
+      warnings.push(`Process "${p.name || p.id}" receives no control actions`);
+  });
   controllers.forEach((c) => {
     if (!c || !c.id) return;
     const vars = c.process_model && c.process_model.variables;
     if (!Array.isArray(vars) || !vars.length) warnings.push(`Controller "${c.name || c.id}" has no process-model variables`);
   });
   return { errors, warnings };
+}
+
+/** acted(id): the process an actuator acts on (else id); measured(id): the process a sensor measures (else id). */
+function loopEnds(m) {
+  const act = new Map((Array.isArray(m.actuators) ? m.actuators : []).filter((a) => a && a.id).map((a) => [a.id, a.target]));
+  const sens = new Map((Array.isArray(m.sensors) ? m.sensors : []).filter((s) => s && s.id).map((s) => [s.id, s.source]));
+  return { acted: (id) => act.get(id) ?? id, measured: (id) => sens.get(id) ?? id };
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -556,6 +605,8 @@ function renderDiagram(m) {
   const procs = (m.controlled_processes || []).filter((p) => p && p.id);
   const cas = (m.control_actions || []).filter((x) => x && x.id);
   const fbs = (m.feedback || []).filter((x) => x && x.id);
+  const acts = (m.actuators || []).filter((x) => x && x.id);
+  const sens = (m.sensors || []).filter((x) => x && x.id);
 
   // Rank controllers: explicit level, else 1 + max rank of controllers commanding it.
   const rank = new Map(ctrls.map((c) => [c.id, Number.isFinite(c.level) ? c.level : 0]));
@@ -567,6 +618,8 @@ function renderDiagram(m) {
   }
   const levels = [...new Set(rank.values())].sort((a, b) => a - b);
   const rows = levels.map((lv) => ctrls.filter((c) => rank.get(c.id) === lv).map((c) => ({ ...c, kind: "ctrl" })));
+  // Actuators and sensors sit between the controllers and the processes, actuators first (as in the Penpot model).
+  if (acts.length || sens.length) rows.push([...acts.map((a) => ({ ...a, kind: "act" })), ...sens.map((s) => ({ ...s, kind: "sens" }))]);
   if (procs.length) rows.push(procs.map((p) => ({ ...p, kind: "proc" })));
 
   const NODE_W = 140, NODE_H = 56;
@@ -580,8 +633,21 @@ function renderDiagram(m) {
     mk.appendChild(applyStyle(svgEl("path", { d: "M0,0 L10,5 L0,10 z" }), { fill: edgeColor(type) }));
     defs.appendChild(mk);
   });
+  // Selected state: a 4 px spread halo with a 2 px blur, like the Penpot "State=Selected" variant.
+  // User-space region, because a straight line has a zero-width bounding box.
+  const halo = svgEl("filter", { id: "sel-halo", filterUnits: "userSpaceOnUse", x: -10000, y: -10000, width: 30000, height: 30000 });
+  halo.append(
+    svgEl("feMorphology", { in: "SourceAlpha", operator: "dilate", radius: 4, result: "spread" }),
+    svgEl("feGaussianBlur", { in: "spread", stdDeviation: 1, result: "blur" }),
+    applyStyle(svgEl("feFlood", { result: "colour" }), { "flood-color": "var(--shadow-sel)" }),
+    svgEl("feComposite", { in: "colour", in2: "blur", operator: "in", result: "halo" }));
+  const merge = svgEl("feMerge", {});
+  merge.append(svgEl("feMergeNode", { in: "halo" }), svgEl("feMergeNode", { in: "SourceGraphic" }));
+  halo.appendChild(merge);
+  defs.appendChild(halo);
   svg.appendChild(defs);
-  const subOf = (n) => n.kind === "ctrl" ? `${n.id} · ${(n.process_model?.variables || []).length} PM vars` : `${n.id} · ${(n.states || []).length} states`;
+  const subOf = (n) => n.kind === "ctrl" ? `${n.id} · ${(n.process_model?.variables || []).length} PM vars`
+    : n.kind === "act" ? `${n.id} · actuator` : n.kind === "sens" ? `${n.id} · sensor` : `${n.id} · ${(n.states || []).length} states`;
   const lblW = (s) => textWidth(s, 11);
 
   // Nodes, one per controller / process, with the channels that leave their bottom and enter their top.
@@ -593,7 +659,10 @@ function renderDiagram(m) {
 
   // Edges with the same type, source and target share one line and stack their labels.
   const groups = new Map();
-  [...cas.map((e) => ({ e, type: "ca", label: e.action })), ...fbs.map((e) => ({ e, type: "fb", label: e.signal }))].forEach(({ e, type, label }) => {
+  // Actuation (actuator → process) and measurement (process → sensor) lines are drawn from the actuator/sensor itself.
+  const actuation = acts.map((a) => ({ e: { id: a.id, source: a.id, target: a.target, action: a.actuation || "actuation", synthetic: true }, type: "ca", label: a.actuation || "actuation" }));
+  const measurement = sens.map((s) => ({ e: { id: s.id, source: s.source, target: s.id, signal: s.measures || "process feedback", synthetic: true }, type: "fb", label: s.measures || "process feedback" }));
+  [...cas.map((e) => ({ e, type: "ca", label: e.action })), ...fbs.map((e) => ({ e, type: "fb", label: e.signal })), ...actuation, ...measurement].forEach(({ e, type, label }) => {
     const a = nodes.get(e.source), b = nodes.get(e.target);
     if (!a || !b || a === b) return;
     const key = type + "|" + e.source + "|" + e.target;
@@ -770,35 +839,155 @@ function renderDiagram(m) {
   svg.appendChild(root);
 
   const edgeLayer = svgEl("g", {}), labelLayer = svgEl("g", {}), nodeLayer = svgEl("g", {});
+  // data-id / data-ids mark control actions for the safety-case trace highlight; data-sel marks what Shift+click selects.
   routes.forEach(({ g, pts }) => {
     const attrs = { d: "M" + pts.map((p) => p.join(",")).join(" L"), class: g.type, "marker-end": `url(#ah-${g.type})` };
-    if (g.type === "ca") attrs["data-ids"] = g.edges.map(({ e }) => e.id).join(",");
+    const synthetic = g.edges[0].e.synthetic;
+    if (!synthetic) attrs["data-sel"] = g.edges.map(({ e }) => e.id).join(",");
+    if (g.type === "ca" && !synthetic) attrs["data-ids"] = attrs["data-sel"];
     const path = svgEl("path", attrs);
-    path.appendChild(svgEl("title", {}, g.edges.map(({ e }) => `${e.id}: ${g.type === "ca" ? e.action : e.signal} (${e.source} → ${e.target})`).join("\n")));
-    if (g.type === "ca") path.addEventListener("click", () => setFocus(g.edges[0].e.id));
+    path.appendChild(svgEl("title", {}, synthetic
+      ? `${g.type === "ca" ? "Actuation" : "Process feedback"}: ${g.edges[0].label} (${g.edges[0].e.source} → ${g.edges[0].e.target})`
+      : g.edges.map(({ e }) => `${e.id}: ${g.type === "ca" ? e.action : e.signal} (${e.source} → ${e.target})`).join("\n") + "\nShift+click to select"));
+    if (g.type === "ca" && !synthetic) path.addEventListener("click", (ev) => { if (!ev.shiftKey) setFocus(g.edges[0].e.id); });
     edgeLayer.appendChild(path);
   });
   labels.forEach(({ type, label, e, r }) => {
     const attrs = { x: r.x, y: r.y + r.h - 3, class: "lbl-" + type };
-    if (type === "ca") attrs["data-id"] = e.id;
+    if (!e.synthetic) attrs["data-sel"] = e.id;
+    if (type === "ca" && !e.synthetic) attrs["data-id"] = e.id;
     const lbl = svgEl("text", attrs, label);
-    lbl.appendChild(svgEl("title", {}, `${e.id}: ${type === "ca" ? e.action : e.signal}`));
-    if (type === "ca") lbl.addEventListener("click", () => setFocus(e.id));
+    lbl.appendChild(svgEl("title", {}, e.synthetic ? label : `${e.id}: ${type === "ca" ? e.action : e.signal}`));
+    if (type === "ca" && !e.synthetic) lbl.addEventListener("click", (ev) => { if (!ev.shiftKey) setFocus(e.id); });
     labelLayer.appendChild(lbl);
   });
   nodes.forEach(({ x, y, w, h, n }) => {
-    const g = svgEl("g", { class: "node " + n.kind, transform: `translate(${x},${y})` });
-    g.appendChild(svgEl("rect", { width: w, height: h, rx: n.kind === "ctrl" ? 6 : 2 }));
+    const g = svgEl("g", { class: "node " + n.kind, transform: `translate(${x},${y})`, "data-sel": n.id });
+    g.appendChild(svgEl("rect", { width: w, height: h, rx: n.kind === "ctrl" ? 6 : n.kind === "proc" ? 2 : 0 }));
     const chars = Math.max(10, Math.floor((w - 16) / 6.5));
     g.appendChild(svgEl("text", { x: w / 2, y: h / 2 - 5, "text-anchor": "middle", "font-weight": 600 }, trunc(n.name || n.id, chars)));
     g.appendChild(svgEl("text", { x: w / 2, y: h / 2 + 13, "text-anchor": "middle", class: "sub" }, subOf(n)));
-    g.appendChild(svgEl("title", {}, n.kind === "ctrl"
+    g.appendChild(svgEl("title", {}, (n.kind === "ctrl"
       ? `${n.name}\nVariables: ${(n.process_model?.variables || []).join(", ")}\nAssumptions: ${(n.process_model?.assumptions || []).join("; ")}`
-      : `${n.name}\nStates: ${(n.states || []).join(", ")}`));
+      : n.kind === "act" ? `${n.name}\nActuates ${n.target}${n.actuation ? ": " + n.actuation : ""}`
+      : n.kind === "sens" ? `${n.name}\nMeasures ${n.source}${n.measures ? ": " + n.measures : ""}`
+      : `${n.name}\nStates: ${(n.states || []).join(", ")}`) + "\nShift+click to select"));
     nodeLayer.appendChild(g);
   });
   root.append(edgeLayer, nodeLayer, labelLayer);
-  $("counts").textContent = `${ctrls.length} controllers · ${procs.length} processes · ${cas.length} CAs · ${fbs.length} feedback`;
+  $("counts").textContent = `${ctrls.length} controllers · ${procs.length} processes · ${cas.length} CAs · ${fbs.length} feedback`
+    + (acts.length ? ` · ${acts.length} actuators` : "") + (sens.length ? ` · ${sens.length} sensors` : "");
+  applySelection();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3a. Selection — Shift+click a process block (controller, process, actuator,
+   sensor), control action or feedback to add or remove it. The selection scopes
+   the analysis (see scopePreamble) and drives the actuator/sensor conversions.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const SEL_KINDS = { controllers: "Controller", controlled_processes: "Process", actuators: "Actuator", sensors: "Sensor", control_actions: "Control action", feedback: "Feedback" };
+let selection = new Set(store.get("selection", []));
+
+/** Each selected element with its section and the model object it refers to, in selection order. */
+function selectedItems(m = currentModel) {
+  if (!m) return [];
+  const byId = new Map();
+  for (const k in SEL_KINDS) (Array.isArray(m[k]) ? m[k] : []).forEach((x) => { if (x && x.id) byId.set(x.id, { kind: k, obj: x }); });
+  return [...selection].filter((id) => byId.has(id)).map((id) => ({ id, ...byId.get(id) }));
+}
+function setSelection(ids) {
+  selection = new Set(ids);
+  store.set("selection", [...selection]);
+  applySelection();
+}
+function toggleSelected(ids) {
+  const next = new Set(selection), on = ids.some((id) => !next.has(id));
+  ids.forEach((id) => (on ? next.add(id) : next.delete(id)));
+  setSelection(next);
+}
+const itemLabel = ({ kind, obj }) => obj.name || (kind === "control_actions" ? obj.action : obj.signal) || obj.id;
+
+function applySelection() {
+  document.querySelectorAll("#diagram [data-sel]").forEach((el) => {
+    el.classList.toggle("sel", el.dataset.sel.split(",").some((id) => selection.has(id)));
+  });
+  const items = selectedItems(), bar = $("selBar");
+  bar.replaceChildren();
+  const btn = (text, title, onClick, disabled) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = text; b.title = title; b.disabled = !!disabled;
+    b.addEventListener("click", onClick);
+    return b;
+  };
+  if (!items.length) {
+    bar.textContent = "Shift+click blocks, control actions or feedback to select them and scope the analysis.";
+  } else {
+    bar.append(`Selected (${items.length}):`);
+    items.forEach((it) => {
+      const chip = document.createElement("span");
+      chip.className = "selchip";
+      chip.title = `${SEL_KINDS[it.kind]} ${it.id}`;
+      chip.append(`${it.id} · ${trunc(itemLabel(it), 28)}`);
+      const x = btn("✕", `Remove ${it.id} from the selection`, () => toggleSelected([it.id]));
+      x.setAttribute("aria-label", `Remove ${it.id} from the selection`);
+      chip.appendChild(x);
+      bar.appendChild(chip);
+    });
+    const procIds = new Set((currentModel.controlled_processes || []).map((p) => p && p.id));
+    const caOk = items.filter((it) => it.kind === "control_actions" && procIds.has(it.obj.target));
+    const fbOk = items.filter((it) => it.kind === "feedback" && procIds.has(it.obj.source));
+    bar.append(
+      btn("Convert to actuator", "Insert an actuator between each selected control action and the process it acts on", () => convertSelected("actuator"), !caOk.length),
+      btn("Convert to sensor", "Insert a sensor between the process and each selected feedback", () => convertSelected("sensor"), !fbOk.length),
+      btn("Clear", "Clear the selection (analyse the whole structure)", () => setSelection([])));
+  }
+  renderScopeLine(items);
+}
+
+function renderScopeLine(items) {
+  const t = $("scopeText");
+  t.replaceChildren();
+  const strong = document.createElement("strong");
+  strong.textContent = "Scope: ";
+  t.append(strong, items.length ? `focus on ${items.map((it) => it.id).join(", ")} (whole structure sent as context)` : "whole control structure");
+}
+
+$("diagram").addEventListener("click", (e) => {
+  if (!e.shiftKey) return;
+  const el = e.target.closest("[data-sel]");
+  if (el) toggleSelected(el.dataset.sel.split(","));
+});
+
+/* Conversions prepare for a deeper level of analysis: a control action that ends at a controlled process
+   gets an actuator in between (controller → actuator → process), and feedback that starts at a process
+   gets a sensor (process → sensor → controller). The control-action/feedback ids stay, so UCAs keep pointing at them. */
+function nextId(m, prefix) {
+  const used = new Set();
+  for (const k in m) if (Array.isArray(m[k])) m[k].forEach((x) => x && x.id && used.add(x.id));
+  let n = 1; while (used.has(prefix + n)) n++;
+  return prefix + n;
+}
+function convertSelected(to) {
+  const m = structuredClone(currentModel), done = [], next = new Set(selection);
+  const procIds = new Set((m.controlled_processes || []).map((p) => p && p.id));
+  selectedItems(m).forEach(({ kind, obj }) => {
+    if (to === "actuator" && kind === "control_actions" && procIds.has(obj.target)) {
+      const id = nextId(m, "a");
+      (m.actuators ||= []).push({ id, name: `${obj.action || obj.id} actuator`, target: obj.target, actuation: "", converted_from: obj.id });
+      obj.target = id;
+      next.delete(obj.id); next.add(id); done.push(`${obj.id} → actuator ${id}`);
+    }
+    if (to === "sensor" && kind === "feedback" && procIds.has(obj.source)) {
+      const id = nextId(m, "s");
+      (m.sensors ||= []).push({ id, name: `${obj.signal || obj.id} sensor`, source: obj.source, measures: "", converted_from: obj.id });
+      obj.source = id;
+      next.delete(obj.id); next.add(id); done.push(`${obj.id} → sensor ${id}`);
+    }
+  });
+  if (!done.length) return;
+  replaceEditor(m);
+  setSelection(next);
+  setStatus(`Converted ${done.join(", ")}. Ctrl/⌘+Z in the editor undoes it.`);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -948,11 +1137,50 @@ function refreshEditor() {
   if (!lastValidation.errors.length) {
     currentModel = model;
     if (!lastValidation.warnings.length) add("ok", "✓ Structure is valid and every control action has a feedback path");
+    const kept = selectedItems(model).map((it) => it.id);
+    if (kept.length !== selection.size) { selection = new Set(kept); store.set("selection", kept); }
     renderDiagram(model);
     renderSafetyCase(model);
   }
 }
 function setEditor(obj) { $("editor").value = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); refreshEditor(); }
+/** Like setEditor, but as an edit the browser can undo (Ctrl/⌘+Z in the editor). */
+function replaceEditor(obj) {
+  const ed = $("editor"), back = document.activeElement, text = JSON.stringify(obj, null, 2);
+  ed.focus(); ed.select();
+  if (!document.execCommand("insertText", false, text)) ed.value = text;
+  ed.setSelectionRange(0, 0); ed.scrollTop = 0;
+  if (back && back !== ed && back.focus) back.focus();
+  clearTimeout(editTimer); refreshEditor();
+}
+
+/* A patch is a partial structure with "patch": true. Elements whose id exists are merged into the existing
+   element (process_model one level deep), new ids are appended to their section, and ids listed in
+   "remove" are deleted from every section. Asking for patches keeps scoped answers short. */
+const STRUCT_KEYS = ["losses", "hazards", "constraints", "controllers", "controlled_processes", "actuators", "sensors", "control_actions", "feedback", "ucas"];
+function applyPatch(base, patch) {
+  const m = structuredClone(base), stats = { added: 0, changed: 0, removed: 0 };
+  if (typeof patch.system === "string") m.system = patch.system;
+  STRUCT_KEYS.forEach((k) => {
+    if (!Array.isArray(patch[k])) return;
+    const list = Array.isArray(m[k]) ? m[k] : (m[k] = []);
+    patch[k].forEach((item) => {
+      if (!item || !item.id) return;
+      const cur = list.find((x) => x && x.id === item.id);
+      if (!cur) { list.push(item); stats.added++; return; }
+      const pm = cur.process_model && item.process_model ? { process_model: { ...cur.process_model, ...item.process_model } } : {};
+      Object.assign(cur, item, pm); stats.changed++;
+    });
+  });
+  const gone = new Set(Array.isArray(patch.remove) ? patch.remove : []);
+  if (gone.size) STRUCT_KEYS.forEach((k) => {
+    if (!Array.isArray(m[k])) return;
+    const n = m[k].length;
+    m[k] = m[k].filter((x) => !(x && gone.has(x.id)));
+    stats.removed += n - m[k].length;
+  });
+  return { model: m, stats };
+}
 
 let editTimer;
 $("editor").addEventListener("input", () => { clearTimeout(editTimer); editTimer = setTimeout(refreshEditor, 250); });
@@ -992,7 +1220,61 @@ const DEFAULTS = {
   gemini_model: "gemini-2.5-pro",
   local_endpoint: "http://localhost:11434/v1/chat/completions",
   local_model: "llama3.1",
+  claude_max_tokens: 64000,
 };
+
+/* Claude models offered in the picker. maxOut caps max_tokens; effort lists the accepted levels (null: don't send
+   output_config); fallback marks the models that take server-side refusal fallback (fallbacks: "default"). */
+const EFFORT_ALL = ["low", "medium", "high", "xhigh", "max"], EFFORT_46 = ["low", "medium", "high", "max"];
+const CLAUDE_MODELS = [
+  { id: "claude-fable-5-1", family: "Fable", label: "Fable 5.1", maxOut: 128000, effort: EFFORT_ALL, fallback: true },
+  { id: "claude-fable-5", family: "Fable", label: "Fable 5", maxOut: 128000, effort: EFFORT_ALL },
+  { id: "claude-opus-5-5", family: "Opus", label: "Opus 5.5", maxOut: 128000, effort: EFFORT_ALL, fallback: true },
+  { id: "claude-opus-5", family: "Opus", label: "Opus 5", maxOut: 128000, effort: EFFORT_ALL, fallback: true },
+  { id: "claude-opus-4-8", family: "Opus", label: "Opus 4.8", maxOut: 128000, effort: EFFORT_ALL },
+  { id: "claude-opus-4-7", family: "Opus", label: "Opus 4.7", maxOut: 128000, effort: EFFORT_ALL },
+  { id: "claude-opus-4-6", family: "Opus", label: "Opus 4.6", maxOut: 128000, effort: EFFORT_46 },
+  { id: "claude-sonnet-5-5", family: "Sonnet", label: "Sonnet 5.5", maxOut: 128000, effort: EFFORT_ALL, fallback: true },
+  { id: "claude-sonnet-5", family: "Sonnet", label: "Sonnet 5", maxOut: 128000, effort: EFFORT_ALL },
+  { id: "claude-sonnet-4-6", family: "Sonnet", label: "Sonnet 4.6", maxOut: 128000, effort: EFFORT_46 },
+  { id: "claude-haiku-5-5", family: "Haiku", label: "Haiku 5.5", maxOut: 128000, effort: EFFORT_ALL },
+  { id: "claude-haiku-4-5", family: "Haiku", label: "Haiku 4.5", maxOut: 64000, effort: null },
+];
+const GEMINI_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+
+/** Read an Anthropic SSE stream into { content, stop_reason, stop_details, usage }. onText(chars) reports progress. */
+async function readClaudeStream(res, onText) {
+  if (!res.ok) return readJson(res); // throws with the API's error message
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  const blocks = [], at = new Map(), usage = {};
+  let buf = "", chars = 0, stop_reason = null, stop_details = null;
+  const handle = (ev) => {
+    if (ev.type === "message_start") Object.assign(usage, ev.message?.usage);
+    else if (ev.type === "content_block_start") at.set(ev.index, blocks.push({ ...ev.content_block, text: ev.content_block?.text || "" }) - 1);
+    else if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta") {
+      const b = blocks[at.get(ev.index)]; if (b) b.text += ev.delta.text;
+      chars += ev.delta.text.length; onText?.(chars);
+    } else if (ev.type === "message_delta") {
+      stop_reason = ev.delta?.stop_reason ?? stop_reason;
+      stop_details = ev.delta?.stop_details ?? stop_details;
+      Object.assign(usage, ev.usage);
+    } else if (ev.type === "error") throw new Error(ev.error?.message || "stream error");
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const data = buf.slice(0, i).split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
+      buf = buf.slice(i + 2);
+      if (!data) continue;
+      let ev; try { ev = JSON.parse(data); } catch { continue; }
+      handle(ev);
+    }
+  }
+  return { content: blocks, stop_reason, stop_details, usage };
+}
 
 async function readJson(res) {
   const raw = await res.text();
@@ -1005,7 +1287,7 @@ async function readJson(res) {
   return data;
 }
 
-async function callLLM({ provider, systemPrompt, messages, signal }) {
+async function callLLM({ provider, systemPrompt, messages, signal, onProgress }) {
   const cfg = settings;
 
   if (provider === "claude") {
@@ -1016,26 +1298,35 @@ async function callLLM({ provider, systemPrompt, messages, signal }) {
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true",
     };
+    const model = cfg.claude_model || DEFAULTS.claude_model;
+    const info = CLAUDE_MODELS.find((x) => x.id === model); // unknown (custom) ids get the request as configured
+    const want = clamp(cfg.claude_max_tokens, 1024, 128000, DEFAULTS.claude_max_tokens);
     const body = {
-      model: cfg.claude_model || DEFAULTS.claude_model,
-      max_tokens: 16000,
+      model,
+      max_tokens: Math.min(want, info?.maxOut ?? want),
+      stream: true, // long answers (a whole revised structure) outlast a non-streaming request
+      cache_control: { type: "ephemeral" }, // the system prompt + structure repeat on every question
       system: systemPrompt,
       messages,
-      output_config: { effort: cfg.claude_effort || "medium" },
     };
-    if (cfg.claude_fallbacks) { // re-run declined requests on a fallback model, server-side
+    if (!info || info.effort) {
+      const effort = cfg.claude_effort || "medium";
+      body.output_config = { effort: !info || info.effort.includes(effort) ? effort : "high" };
+    }
+    if (cfg.claude_fallbacks && (!info || info.fallback)) { // re-run declined requests on a fallback model, server-side
       headers["anthropic-beta"] = "server-side-fallback-2026-07-01";
       body.fallbacks = "default";
     }
-    const data = await readJson(await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body), signal }));
+    const data = await readClaudeStream(await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body), signal }), onProgress);
     // Thinking blocks may precede the answer, so join every text block instead of reading content[0].
     const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n\n");
     if (data.stop_reason === "refusal") {
       const why = data.stop_details?.explanation || data.stop_details?.category || "no details";
       return { text: (text ? text + "\n\n" : "") + `_The model declined this request (${why})._`, raw: data };
     }
-    if (data.stop_reason === "max_tokens") return { text: text + "\n\n_…output truncated at max_tokens._", raw: data };
-    return { text: text || JSON.stringify(data), raw: data };
+    if (data.stop_reason === "max_tokens")
+      return { text: text + `\n\n_…output truncated at ${body.max_tokens} tokens. Narrow the scope (Shift+click the elements to focus on), ask for a patch, or raise Max output tokens in Settings._`, raw: data, usage: data.usage };
+    return { text: text || JSON.stringify(data), raw: data, usage: data.usage };
   }
 
   if (provider === "gemini") {
@@ -1119,11 +1410,14 @@ const LOCAL_TOOLS = [
 ];
 
 function listLoops(m) {
-  const name = (id) => [...(m.controllers || []), ...(m.controlled_processes || [])].find((n) => n.id === id)?.name || id;
+  const name = (id) => [...(m.controllers || []), ...(m.controlled_processes || []), ...(m.actuators || []), ...(m.sensors || [])].find((n) => n.id === id)?.name || id;
+  const { acted, measured } = loopEnds(m);
   return (m.control_actions || []).map((ca) => ({
-    control_action: ca.id, action: ca.action, controller: name(ca.source), target: name(ca.target),
-    feedback: (m.feedback || []).filter((fb) => fb.source === ca.target && fb.target === ca.source)
-      .map((fb) => ({ id: fb.id, signal: fb.signal, latency_tolerance_ms: fb.latency_tolerance_ms ?? null })),
+    control_action: ca.id, action: ca.action, controller: name(ca.source), target: name(acted(ca.target)),
+    ...(acted(ca.target) !== ca.target ? { via_actuator: ca.target } : {}),
+    feedback: (m.feedback || []).filter((fb) => fb.target === ca.source && (fb.source === ca.target || measured(fb.source) === acted(ca.target)))
+      .map((fb) => ({ id: fb.id, signal: fb.signal, latency_tolerance_ms: fb.latency_tolerance_ms ?? null,
+        ...(measured(fb.source) !== fb.source ? { via_sensor: fb.source } : {}) })),
   }));
 }
 
@@ -1235,9 +1529,29 @@ Rules:
 - Reference elements by their JSON ids (c1, ca2, fb3, H1…). Do not invent components without labelling them "proposed".
 - Prefer Markdown tables for UCA lists: columns Control action | Not provided | Provided | Too early/late/order | Too long/short.
 - Be concise and specific; state uncertainty instead of guessing.
-- If you propose a reconfigured structure, give the complete JSON in one \`\`\`json block using the same schema, including any new UCAs under
+- If you propose a reconfigured structure, give it in one \`\`\`json block using the same schema (a patch, as described below, unless the complete structure is asked for), including any new UCAs under
   "ucas": [{"id": "UCA-n", "control_action": "<control_action id>", "type": "not_provided" | "provided_unsafe" | "wrong_timing" | "wrong_duration", "context": "…", "hazards": ["H#"]}]
   so they appear in the editor's UCA table alongside the losses, hazards and constraints.`;
+
+/* Appended after the (editable) system prompt, so saved custom prompts still learn the schema additions and patches. */
+const STRUCTURE_PROMPT = `
+
+Schema additions:
+- "actuators": [{"id": "a1", "name": "…", "target": "<controlled process id>", "actuation": "<what it does to the process>"}]
+- "sensors": [{"id": "s1", "name": "…", "source": "<controlled process id>", "measures": "<quantity measured>"}]
+A control action may target an actuator, and feedback may come from a sensor; the actuator acts on its target process and the sensor measures its source process. Use them when detailing how a controller acts on or observes a process (e.g. redundant or diverse channels).
+
+Changing the structure: unless the user explicitly asks for the complete structure, do NOT repeat unchanged elements. Return one \`\`\`json block that is a patch:
+{"patch": true, "controlled_processes": [{"id": "p1", "name": "New name"}], "actuators": [{"id": "a2", …}], "remove": ["ca2"]}
+An element whose id already exists is merged into it (only the fields you give change); a new id is added; ids in "remove" are deleted. Keep existing ids stable so UCAs and links stay valid, and give new elements ids that are not used yet.`;
+
+/** User-turn preamble that scopes a question to the selection; the whole structure is already in the system prompt. */
+function scopePreamble(items) {
+  if (!items.length) return "";
+  const picked = {};
+  items.forEach(({ kind, obj }) => (picked[kind] ||= []).push(obj));
+  return `Analysis scope: I selected these elements in the control structure diagram. Focus on them and on their direct interactions (the control actions and feedback that connect them). Use the rest of the structure only as context; do not analyse unselected elements in depth, and keep any structure change to a patch.\nSelected elements (JSON):\n${JSON.stringify(picked, null, 2)}\n\nQuestion:\n`;
+}
 
 const TOOL_PROMPT = (tools) => `
 
@@ -1258,11 +1572,11 @@ const QUICK_ACTIONS = [
   ["Safety constraints", "Derive controller-level safety constraints from the UCAs, traceable to UCA and hazard ids."],
 ];
 
-let history = [];      // [{ role, content }] as sent to the provider
+let history = [];      // [{ role, content }] of finished questions, sent only when "Send earlier turns" is on
 let busy = null;       // AbortController while a request runs
 
 function buildSystemPrompt() {
-  let sp = settings.system_prompt || DEFAULT_SYSTEM_PROMPT;
+  let sp = (settings.system_prompt || DEFAULT_SYSTEM_PROMPT) + STRUCTURE_PROMPT;
   if (settings.mcp_enabled) sp += TOOL_PROMPT([...LOCAL_TOOLS, ...mcpRemote.tools]);
   const errs = lastValidation.errors.length ? `\n\nNote: the editor currently has errors (${lastValidation.errors.join("; ")}); the last valid version is shown.` : "";
   return `${sp}${errs}\n\nCurrent control structure (JSON):\n${JSON.stringify(currentModel || {}, null, 2)}`;
@@ -1271,30 +1585,35 @@ function buildSystemPrompt() {
 async function send(userText) {
   if (busy || !userText.trim()) return;
   if (!currentModel) { addMessage("error", "Fix the JSON in the editor first — there is no valid structure to analyse."); return; }
-  addMessage("user", userText);
-  history.push({ role: "user", content: userText });
+  const scope = selectedItems();
+  addMessage("user", userText, scope.length ? `Scope: ${scope.map((it) => it.id).join(", ")}` : "Scope: whole structure");
+  // Each question carries the structure (system prompt) and its scope; earlier turns only when asked for.
+  const prior = settings.keep_history ? history : [];
+  const turn = [{ role: "user", content: scopePreamble(scope) + userText }];
   busy = new AbortController();
   setBusy(true);
-  const provider = settings.provider;
+  const provider = settings.provider, model = providerLabel();
   try {
     for (let round = 0; ; round++) {
-      setStatus(round ? `Running tool round ${round}…` : `Waiting for ${providerLabel()}…`);
+      setStatus(round ? `Running tool round ${round}…` : `Waiting for ${model}…`);
       const t0 = performance.now();
-      const { text } = await callLLM({ provider, systemPrompt: buildSystemPrompt(), messages: history, signal: busy.signal });
-      history.push({ role: "assistant", content: text });
+      const { text, usage } = await callLLM({ provider, systemPrompt: buildSystemPrompt(), messages: [...prior, ...turn], signal: busy.signal,
+        onProgress: (n) => setStatus(`Receiving from ${model}… ${n.toLocaleString()} characters`) });
+      turn.push({ role: "assistant", content: text });
       const call = settings.mcp_enabled ? extractToolCall(text) : null;
       if (!call || round >= MAX_TOOL_ROUNDS) {
-        addMessage("assistant", text, `${providerLabel()} · ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+        const tokens = usage ? ` · ${(usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)} in / ${usage.output_tokens ?? "?"} out tokens` : "";
+        addMessage("assistant", text, `${model} · ${((performance.now() - t0) / 1000).toFixed(1)} s${tokens}`);
         break;
       }
       const response = await mcpLocalDispatch(call);
       addToolChip(call, response);
       if (pendingProposal) { addProposal(pendingProposal); pendingProposal = null; }
-      history.push({ role: "user", content: "MCP tool result (JSON-RPC response):\n```json\n" + JSON.stringify(response) + "\n```" });
+      turn.push({ role: "user", content: "MCP tool result (JSON-RPC response):\n```json\n" + JSON.stringify(response) + "\n```" });
     }
+    history.push(...turn);
     setStatus("");
   } catch (e) {
-    history.pop(); // drop the unanswered user turn so the conversation stays well-formed
     addMessage("error", e.name === "AbortError" ? "Request cancelled." : explainError(e));
     setStatus("");
   } finally {
@@ -1417,18 +1736,18 @@ function setToolsHidden(hide) {
 }
 $("toolsBtn").addEventListener("click", () => setToolsHidden(!$("log").classList.contains("hide-tools")));
 
-/** Turn a ```json control structure in a reply into a card: actions on top, the JSON folded below. */
+/** Turn a ```json control structure (or structure patch) in a reply into a card: actions on top, the JSON folded below. */
 function attachJsonActions(body) {
   body.querySelectorAll('pre[data-lang="json"]').forEach((pre) => {
     let obj; try { obj = JSON.parse(pre.textContent); } catch { return; }
-    if (!obj || !Array.isArray(obj.controllers)) return;
-    const check = validateModel(obj);
+    if (!obj || typeof obj !== "object") return;
+    const isPatch = obj.patch === true;
+    if (!isPatch && !Array.isArray(obj.controllers)) return;
     const card = document.createElement("div");
     card.className = "struct-card";
     const head = document.createElement("div");
     head.className = "head";
     const title = document.createElement("strong");
-    title.textContent = `Control structure · ${(obj.controllers || []).length} controllers, ${(obj.control_actions || []).length} actions, ${(obj.feedback || []).length} feedback`;
     const copy = document.createElement("button");
     copy.textContent = "Copy JSON";
     copy.addEventListener("click", async () => {
@@ -1436,8 +1755,28 @@ function attachJsonActions(body) {
       catch { copy.textContent = "Copy failed"; }
     });
     const load = document.createElement("button");
-    load.textContent = check.errors.length ? `Load anyway (${check.errors.length} errors)` : "Load into editor";
-    load.addEventListener("click", () => { if (confirm("Replace the editor contents with this structure? (Save first if you want to keep the current one.)")) setEditor(obj); });
+    if (isPatch) {
+      const n = (k) => (Array.isArray(obj[k]) ? obj[k].length : 0);
+      const parts = STRUCT_KEYS.filter(n).map((k) => `${n(k)} ${k.replace(/_/g, " ")}`);
+      if (n("remove")) parts.push(`remove ${obj.remove.join(", ")}`);
+      title.textContent = `Structure patch · ${parts.join(", ") || "no changes"}`;
+      load.textContent = "Apply to editor";
+      load.title = "Merge into the current structure by id (Ctrl/⌘+Z in the editor undoes it)";
+      load.addEventListener("click", () => {
+        if (!currentModel) return;
+        const { model, stats } = applyPatch(currentModel, obj);
+        const errs = validateModel(model).errors;
+        if (errs.length && !confirm(`The merged structure has ${errs.length} error(s):\n\n${errs.slice(0, 8).join("\n")}\n\nApply anyway?`)) return;
+        replaceEditor(model);
+        load.textContent = "Applied";
+        setStatus(`Patch applied: ${stats.added} added, ${stats.changed} changed, ${stats.removed} removed.`);
+      });
+    } else {
+      const check = validateModel(obj);
+      title.textContent = `Control structure · ${(obj.controllers || []).length} controllers, ${(obj.control_actions || []).length} actions, ${(obj.feedback || []).length} feedback`;
+      load.textContent = check.errors.length ? `Load anyway (${check.errors.length} errors)` : "Load into editor";
+      load.addEventListener("click", () => { if (confirm("Replace the editor contents with this structure? (Save first if you want to keep the current one.)")) setEditor(obj); });
+    }
     head.append(title, copy, load);
     const details = document.createElement("details");
     const sum = document.createElement("summary");
@@ -1477,14 +1816,14 @@ $("saveLogBtn").addEventListener("click", () => {
 });
 
 /* ── Settings ──────────────────────────────────────────────────────────── */
-const SETTING_FIELDS = ["provider", "claude_key", "claude_model", "claude_effort", "claude_fallbacks", "gemini_key", "gemini_model",
-  "local_endpoint", "local_model", "local_key", "mcp_enabled", "mcp_sse_url", "system_prompt", "remember_keys"];
+const SETTING_FIELDS = ["provider", "claude_key", "claude_model", "claude_max_tokens", "claude_effort", "claude_fallbacks", "gemini_key", "gemini_model",
+  "local_endpoint", "local_model", "local_key", "mcp_enabled", "mcp_sse_url", "system_prompt", "remember_keys", "keep_history"];
 const SECRET_FIELDS = ["claude_key", "gemini_key", "local_key"];
 let settings = {};
 
 function loadSettings() {
   const saved = store.get("settings", {});
-  settings = { provider: "claude", claude_model: DEFAULTS.claude_model, claude_effort: "medium", claude_fallbacks: true,
+  settings = { provider: "claude", claude_model: DEFAULTS.claude_model, claude_max_tokens: DEFAULTS.claude_max_tokens, claude_effort: "medium", claude_fallbacks: true,
     gemini_model: DEFAULTS.gemini_model, local_endpoint: DEFAULTS.local_endpoint, local_model: DEFAULTS.local_model,
     mcp_enabled: true,
     system_prompt: DEFAULT_SYSTEM_PROMPT, remember_keys: true, ...saved };
@@ -1502,7 +1841,27 @@ function saveSettings() {
   store.set("settings", persisted);
   updateBadge();
 }
-function updateBadge() { $("modelBadge").textContent = providerLabel(); }
+/** Fill the model picker beside Send for the current provider; a custom id from Settings is kept as an extra entry. */
+function updateBadge() {
+  const pick = $("modelPick"), p = settings.provider, cur = providerLabel();
+  pick.replaceChildren();
+  if (p === "claude") {
+    [...new Set(CLAUDE_MODELS.map((x) => x.family))].forEach((fam) => {
+      const og = document.createElement("optgroup");
+      og.label = fam;
+      CLAUDE_MODELS.filter((x) => x.family === fam).forEach((x) => og.appendChild(new Option(`${x.label} (${x.id})`, x.id)));
+      pick.appendChild(og);
+    });
+  } else if (p === "gemini") GEMINI_MODELS.forEach((id) => pick.appendChild(new Option(id, id)));
+  if (![...pick.options].some((o) => o.value === cur)) pick.appendChild(new Option(p === "local" ? cur : `${cur} (custom)`, cur));
+  pick.value = cur;
+}
+$("modelPick").addEventListener("change", (e) => {
+  const field = $(settings.provider + "_model");
+  field.value = e.target.value;
+  saveSettings();
+});
+CLAUDE_MODELS.forEach((x) => $("claudeModels").appendChild(new Option(x.label, x.id)));
 
 SETTING_FIELDS.forEach((k) => $(k)?.addEventListener("change", saveSettings));
 $("forgetKeys").addEventListener("click", () => {
