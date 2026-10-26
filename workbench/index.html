@@ -936,9 +936,12 @@ function applySelection() {
     const procIds = new Set((currentModel.controlled_processes || []).map((p) => p && p.id));
     const caOk = items.filter((it) => it.kind === "control_actions" && procIds.has(it.obj.target));
     const fbOk = items.filter((it) => it.kind === "feedback" && procIds.has(it.obj.source));
+    const back = revertTargets(currentModel, items);
     bar.append(
       btn("Convert to actuator", "Insert an actuator between each selected control action and the process it acts on", () => convertSelected("actuator"), !caOk.length),
       btn("Convert to sensor", "Insert a sensor between the process and each selected feedback", () => convertSelected("sensor"), !fbOk.length),
+      btn("Back to control action", "Remove the actuator: the selected control actions (or every control action into the selected actuators) act on the process directly", () => revertSelected("actuator"), !back.cas.length),
+      btn("Back to feedback", "Remove the sensor: the selected feedback (or all feedback from the selected sensors) comes from the process directly", () => revertSelected("sensor"), !back.fbs.length),
       btn("Clear", "Clear the selection (analyse the whole structure)", () => setSelection([])));
   }
   renderScopeLine(items);
@@ -988,6 +991,41 @@ function convertSelected(to) {
   replaceEditor(m);
   setSelection(next);
   setStatus(`Converted ${done.join(", ")}. Ctrl/⌘+Z in the editor undoes it.`);
+}
+
+/* The reverse conversions: a control action that ends at an actuator goes straight to the actuator's process,
+   and feedback that starts at a sensor comes straight from the sensor's process. Selecting the actuator or sensor
+   itself reverts every link through it. An actuator or sensor that nothing points at any more is removed. */
+function revertTargets(m, items) {
+  const act = new Set((m.actuators || []).map((a) => a && a.id)), sens = new Set((m.sensors || []).map((s) => s && s.id));
+  const pick = new Set(items.map((it) => it.id));
+  const cas = (m.control_actions || []).filter((ca) => ca && act.has(ca.target) && (pick.has(ca.id) || pick.has(ca.target)));
+  const fbs = (m.feedback || []).filter((fb) => fb && sens.has(fb.source) && (pick.has(fb.id) || pick.has(fb.source)));
+  return { cas, fbs };
+}
+function revertSelected(from) {
+  const m = structuredClone(currentModel), done = [], next = new Set(selection);
+  const { cas, fbs } = revertTargets(m, selectedItems(m));
+  const links = from === "actuator" ? cas : fbs, key = from === "actuator" ? "target" : "source";
+  const nodes = new Map((m[from === "actuator" ? "actuators" : "sensors"] || []).filter((x) => x && x.id).map((x) => [x.id, x]));
+  const touched = new Set();
+  links.forEach((obj) => {
+    const node = nodes.get(obj[key]);
+    touched.add(node.id);
+    obj[key] = from === "actuator" ? node.target : node.source;
+    next.add(obj.id); done.push(`${obj.id} → ${obj[key]}`);
+  });
+  if (!done.length) return;
+  const used = (id) => (m.control_actions || []).some((ca) => ca && ca.target === id) ||
+    (m.feedback || []).some((fb) => fb && (fb.source === id || fb.target === id));
+  const gone = [...touched].filter((id) => !used(id));
+  const sec = from === "actuator" ? "actuators" : "sensors";
+  m[sec] = m[sec].filter((x) => !(x && gone.includes(x.id)));
+  if (!m[sec].length) delete m[sec];
+  gone.forEach((id) => next.delete(id));
+  replaceEditor(m);
+  setSelection(next);
+  setStatus(`Reverted ${done.join(", ")}${gone.length ? `; removed ${from} ${gone.join(", ")}` : ""}. Ctrl/⌘+Z in the editor undoes it.`);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
