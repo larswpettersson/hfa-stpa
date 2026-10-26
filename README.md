@@ -1,10 +1,10 @@
 # STPA — System-Theoretic Process Analysis
 
+**🔗 Live workbench: [larswpettersson.github.io/hfa-stpa/workbench/](https://larswpettersson.github.io/hfa-stpa/workbench/)**
+
 This repository supports **STPA** (System-Theoretic Process Analysis) work for HFA safety and systems engineering: documenting control structures, unsafe control actions (UCAs), loss scenarios, and countermeasures.
 
-STPA complements other HFA analysis artifacts (e.g. [Bowtie](../Bowtie/), [RBD](../RBD/), [HTA Tool](../HTA-tool/)) by focusing on feedback loops, controllers, and systemic causes of unsafe behavior rather than component failure alone.
-
-This repository is **private initially** while STPA models and workshop material are in early development. Make it public later only when content is ready to share outside the core team.
+STPA complements other HFA analysis artifacts (e.g. [Bowtie](https://github.com/larswpettersson/hfa-bowtie), [RBD](https://github.com/larswpettersson/hfa-rbd), [HTA Tool](https://github.com/larswpettersson/hfa-hta)) by focusing on feedback loops, controllers, and systemic causes of unsafe behavior rather than component failure alone.
 
 ## Repository layout
 
@@ -12,15 +12,15 @@ This repository is **private initially** while STPA models and workshop material
 |------|---------|
 | `docs/` | Reference material, workshop notes, exported diagrams |
 | `analysis/` | STPA models and working artifacts (control diagrams, UCA tables, scenarios) |
-| `workbench/` | Single-file STPA control-structure editor with LLM analysis (open `workbench/index.html` in a browser) |
+| `workbench/` | Single-file STPA control-structure editor with LLM analysis. See [workbench/README.md](workbench/README.md#run) for how to run it |
 
 ## Design system
 
-Shared tokens and Penpot integration live in [hfa-ds](../hfa-ds/). Use the same conventions as sibling HFA projects when building viewers or editors here.
+Shared tokens and Penpot integration live in [hfa-ds](https://github.com/larswpettersson/hfa-ds). Use the same conventions as sibling HFA projects when building viewers or editors here.
 
 ### Tokens (Penpot file-local)
 
-STPA’s Penpot file is synced from [`hfa-ds/tokens.json`](../hfa-ds/tokens.json) (HFA DS token contract):
+STPA’s Penpot file is synced from [`hfa-ds/tokens.json`](https://github.com/larswpettersson/hfa-ds/blob/main/tokens.json) (HFA DS token contract):
 
 1. Connect **STPA** in Penpot MCP  
 2. Run hfa-ds `scripts/penpot/import-bundle.js` (or flatten `tokens.json` → upsert `mode/light` + `mode/dark`)  
@@ -60,24 +60,8 @@ Routed diagram links are **paths** (solid = control, dashed = information) with 
 
 ## Getting started
 
-1. Add control-structure and UCA artifacts under `analysis/`.
-2. Keep sensitive or environment-specific values out of git (see `.gitignore`).
-3. When ready, create the GitHub remote as **private** and push (see [GitHub](#github) below).
-
-## GitHub
-
-Create the remote as a **private** repository:
-
-```bash
-gh auth login
-gh repo create larswpettersson/STPA --private --source=. --remote=origin --push
-```
-
-When the project is ready for wider sharing, change visibility in GitHub settings or with:
-
-```bash
-gh repo edit larswpettersson/STPA --visibility public --accept-visibility-change-consequences
-```
+- **Use the workbench:** open the [live version](https://larswpettersson.github.io/hfa-stpa/workbench/), or see [workbench/README.md](workbench/README.md#run) to run it offline.
+- **Add analysis work:** put control-structure and UCA artifacts under `analysis/`. Keep sensitive or environment-specific values out of git.
 
 ## Related projects
 
