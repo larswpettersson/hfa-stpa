@@ -24,15 +24,25 @@ Based on the STPA Handbook (Leveson & Thomas 2018):
 - Model output can be applied as a patch, but it is applied as accepted fact. Nothing marks it as a proposal.
 - There is nowhere to store "considered, not hazardous", scenarios, controller constraints or requirements. So the tool can't show progress or continue where the analyst stopped.
 
-## Phase 0 — Reverse conversions (done)
+## Phase 0 — Editing the structure (done)
 
-**Back to control action** and **Back to feedback** in the selection bar undo **Convert to actuator** / **Convert to sensor**.
+- **Switch to**: a process block can change type (controller, controlled process, actuator, sensor), from **Switch to…** in the selection bar or the **Type** column of the blocks table.
+  - The id, name and links stay.
+  - Fields that only the old type has go into `switched_from`, and they come back when the block is switched back.
+  - The model can do the same with a patch: `remove` now runs before the merge, so removing an id and adding it to another section switches its type. The system prompt explains this.
+- **Structure tables** (blocks, control actions, feedback) are where text is typed and added.
+  - Clicking an element in the diagram opens its row and focuses its name or labels.
+  - A change is one undoable edit of the JSON.
+  - New rows start from the selection.
+  - Deleting a block deletes its links.
+- **Several labels**: a control action's `action` and a feedback's `signal` can be a list. Each label is typed on its own line, and the diagram stacks the labels.
+- **Layout**:
+  - Every view has Compress and Expand.
+  - The panels split ¼ to ¾ with a draggable, keyboard-accessible divider and ⇤ ⇥ buttons, so the control structure can take ⅔ or ¾ with the analysis in view.
+  - The state is saved in the browser.
+- Tests: `hfa-ds/tests/stpa/structure-tables.spec.mjs`, plus the switch test in `scope.spec.mjs`.
 
-- Select an actuator block, or a control action that ends at an actuator: each control action through it points straight at the actuator's process again. The same works for a sensor and feedback.
-- An actuator or sensor that no control action or feedback points at any more is removed. If the list becomes empty, the `actuators`/`sensors` key is removed too, so convert followed by revert gives back the original JSON.
-- It goes through `replaceEditor`, so Ctrl/⌘+Z undoes it.
-- Code: `revertTargets` / `revertSelected` next to `convertSelected` (section 3a).
-- Test: `hfa-ds/tests/stpa/scope.spec.mjs` › "convert an actuator back to a control action and a sensor back to feedback".
+Later phases build on this: the worksheets in Phases 3 and 5 are new views with the same Compress/Expand controls, and they edit the JSON the same way the structure tables do (`editStructure`).
 
 ## Phase 1 — Data model for step-wise work
 

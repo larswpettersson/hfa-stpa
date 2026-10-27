@@ -77,28 +77,51 @@
   header h1 .mark { width: 10px; height: 10px; border-radius: 2px; background: var(--brand); }
   .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
-  main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 12px 16px; min-height: 0; }
-  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
-  .panel { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; }
+  /* --left/--right are the panel shares set by the splitter and the panels' Expand/Compress buttons. */
+  main { flex: 1; display: grid; grid-template-columns: minmax(0, var(--left, 1fr)) 12px minmax(0, var(--right, 1fr)); padding: 12px 16px; min-height: 0; }
+  #splitter { cursor: col-resize; display: flex; justify-content: center; touch-action: none; }
+  #splitter::before { content: ""; width: 2px; height: 100%; border-radius: 1px; background: transparent; }
+  #splitter:hover::before, #splitter:focus-visible::before, #splitter.drag::before { background: var(--border); }
+  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); gap: 12px; } #splitter, .panel .wbtn { display: none; } }
+  .panel { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .panel > .pbody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+  /* Views: each has a bar with its title (click to compress) and an Expand button. A compressed view keeps its
+     body rendered at zero height, so the JSON editor can still take focus for undoable edits. */
+  .view { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 120px; border-top: 1px solid var(--border); }
+  .view:first-child { border-top: 0; }
+  .view > .vbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; background: var(--bg-elev); }
+  .view > .vbar .vtitle { margin-right: auto; border: 0; background: none; padding: 2px 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-muted); }
+  .view > .vbar .vtitle::before { content: "▾ "; font-weight: 400; }
+  .view > .vbar button:not(.vtitle) { padding: 1px 8px; font-size: 12px; }
+  .view > .vbody { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+  .view.compressed { flex: none; min-height: 0; }
+  .view.compressed > .vbody { flex: none; height: 0; overflow: hidden; }
+  .view.compressed > .vbar .vtitle::before { content: "▸ "; }
+  .view.expanded { flex: 1 0 auto; }
+  .view.expanded > .vbody, .view.expanded #diagramWrap { max-height: none !important; }
+  .vbar button[aria-pressed="true"] { background: var(--bg-sunken); border-color: var(--fg-subtle); }
+  #vJson:not(.compressed):not(.expanded) { flex: 1 1 200px; }
   .panel > .bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 8px; border-bottom: 1px solid var(--border); }
   .panel > .bar h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-muted); margin: 0 auto 0 0; }
 
   #editor {
-    flex: 1 1 320px; min-height: 240px; resize: vertical; border: 0; padding: 10px; background: var(--bg-sunken);
+    flex: 1 1 200px; min-height: 160px; resize: vertical; border: 0; padding: 10px; background: var(--bg-sunken);
     font: 12.5px/1.5 var(--mono); tab-size: 2; white-space: pre; overflow: auto;
   }
-  #issues { max-height: 140px; overflow: auto; border-top: 1px solid var(--border); font-size: 13px; }
+  #issues { flex: none; max-height: 140px; overflow: auto; border-top: 1px solid var(--border); font-size: 13px; }
   #issues div { padding: 3px 10px; border-bottom: 1px solid var(--border); }
   #issues .err { background: var(--bg-error); }
   #issues .warn { background: var(--bg-warning); }
   #issues .ok { background: var(--bg-success); }
-  #diagramWrap { border-top: 1px solid var(--border); overflow: auto; min-height: 200px; max-height: 46vh; background: var(--bg); }
+  #diagramWrap { border-top: 1px solid var(--border); overflow: auto; min-height: 200px; max-height: 46vh; background: var(--bg); flex: 1 1 auto; }
+  #vDiagram > .vbody { overflow: hidden; }
   #diagram { display: block; user-select: none; -webkit-user-select: none; }
   #diagram .node rect { stroke-width: 1.5; }
   #diagram .ctrl rect { fill: var(--bg-elev); stroke: var(--brand); }
   #diagram .proc rect { fill: var(--bg-sunken); stroke: var(--fg-muted); }
   #diagram .act rect, #diagram .sens rect { fill: var(--bg-elev); stroke: var(--fg); stroke-width: 1; }
-  #diagram .node[data-sel]:hover rect, #diagram path[data-sel]:hover, #diagram text[data-sel]:hover { filter: drop-shadow(4px 4px 4px var(--shadow-hover)); }
+  #diagram .node[data-sel]:hover rect, #diagram path[data-sel]:hover, #diagram text[data-sel]:hover,
+  #diagram .node.editing rect, #diagram path.editing, #diagram text.editing { filter: drop-shadow(4px 4px 4px var(--shadow-hover)); }
   #diagram .node.sel rect, #diagram path.sel, #diagram text.sel { filter: url(#sel-halo); }
   #diagram .node.sel[data-sel]:hover rect, #diagram path.sel:hover, #diagram text.sel:hover { filter: url(#sel-halo) drop-shadow(4px 4px 4px var(--shadow-hover)); }
   #diagram text { fill: var(--fg); font: 12px var(--font); }
@@ -121,27 +144,41 @@
   #scopeLine strong { color: var(--fg); font-weight: 600; }
   #scopeLine label { display: inline-flex; gap: 4px; align-items: center; margin-left: auto; }
   #modelPick { max-width: 210px; }
-  #safetyCaseWrap { border-top: 1px solid var(--border); max-height: 32vh; overflow: auto; }
-  #safetyCaseWrap details { border-bottom: 1px solid var(--border); }
-  #safetyCaseWrap summary { cursor: pointer; padding: 7px 10px; font-size: 13px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 6px; }
-  #safetyCaseWrap summary::-webkit-details-marker { display: none; }
-  #safetyCaseWrap summary::before { content: "▸"; display: inline-block; transition: transform .15s; font-weight: 400; color: var(--fg-muted); }
-  #safetyCaseWrap details[open] summary::before { transform: rotate(90deg); }
-  #safetyCaseWrap summary .n { font-weight: 400; color: var(--fg-muted); font-size: 12px; }
-  #safetyCaseWrap .tblwrap { padding: 0 10px 10px; overflow: auto; }
-  #safetyCaseWrap table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  #safetyCaseWrap th, #safetyCaseWrap td { border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: left; vertical-align: top; }
-  #safetyCaseWrap th { color: var(--fg-muted); font-weight: 600; }
-  #safetyCaseWrap tbody tr { cursor: pointer; }
-  #safetyCaseWrap tbody tr:hover { background: var(--bg-sunken); }
-  #safetyCaseWrap tr.hl { background: var(--brand-subtle); }
-  #safetyCaseWrap tr.dim { opacity: .4; }
-  #safetyCaseWrap .chip { display: inline-block; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px;
+  .tables { border-top: 1px solid var(--border); max-height: 32vh; overflow: auto; }
+  .tables details { border-bottom: 1px solid var(--border); }
+  .tables summary { cursor: pointer; padding: 7px 10px; font-size: 13px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 6px; }
+  .tables summary::-webkit-details-marker { display: none; }
+  .tables summary::before { content: "▸"; display: inline-block; transition: transform .15s; font-weight: 400; color: var(--fg-muted); }
+  .tables details[open] summary::before { transform: rotate(90deg); }
+  .tables summary .n { font-weight: 400; color: var(--fg-muted); font-size: 12px; }
+  .tables .tblwrap { padding: 0 10px 10px; overflow: auto; }
+  .tables table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .tables th, .tables td { border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: left; vertical-align: top; }
+  .tables th { color: var(--fg-muted); font-weight: 600; }
+  .tables tbody tr { cursor: pointer; }
+  .tables tbody tr:hover { background: var(--bg-sunken); }
+  .tables tr.hl { background: var(--brand-subtle); }
+  .tables tr.dim { opacity: .4; }
+  .tables .chip { display: inline-block; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px;
     padding: 0 7px; margin: 1px 3px 1px 0; font-size: 11px; cursor: pointer; }
-  #safetyCaseWrap .chip:hover { border-color: var(--fg-subtle); }
-  #safetyCaseWrap .chip.hl { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+  .tables .chip:hover { border-color: var(--fg-subtle); }
+  .tables .chip.hl { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
 
-  #log { flex: 1; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; min-height: 240px; }
+  /* Structure tables: every cell is a field; a change is written to the JSON as one undoable edit. */
+  #structureWrap td { vertical-align: top; }
+  #structureWrap tbody tr { cursor: default; }
+  #structureWrap tr.cur { background: var(--brand-subtle); }
+  #structureWrap input, #structureWrap select, #structureWrap textarea { width: 100%; min-width: 70px; padding: 3px 6px; font-size: 12.5px;
+    background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); }
+  #structureWrap textarea { resize: vertical; min-height: 28px; line-height: 1.35; display: block; }
+  #structureWrap .fld { display: grid; gap: 1px; margin-bottom: 4px; font-size: 11px; color: var(--fg-muted); }
+  #structureWrap .fld:last-child { margin-bottom: 0; }
+  #structureWrap td.idc { font-family: var(--mono); font-size: 12px; padding-top: 7px; white-space: nowrap; }
+  #structureWrap button.del { border: 0; background: none; padding: 3px 6px; color: var(--fg-muted); }
+  #structureWrap .adds { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 6px; }
+  #structureWrap .adds button { padding: 2px 8px; font-size: 12px; }
+  #structureWrap .note { padding: 6px 10px; font-size: 12px; color: var(--fg-muted); }
+  #log { flex: 1; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; min-height: 160px; }
   .msg { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; max-width: 100%; overflow-x: auto; }
   .msg.user { background: var(--brand-subtle); align-self: flex-end; max-width: 90%; white-space: pre-wrap; }
   .msg.assistant { background: var(--bg-elev); }
@@ -207,49 +244,89 @@
 
 <main>
   <!-- ───────────── Left: STPA editor ───────────── -->
-  <section class="panel" aria-label="STPA control structure editor">
+  <section class="panel" id="leftPanel" aria-label="STPA control structure editor">
     <div class="bar">
       <h2>Control structure</h2>
       <select id="preset" aria-label="Load preset"><option value="">Load preset…</option></select>
       <button id="formatBtn" title="Pretty-print JSON">Format</button>
       <button id="importBtn" title="Open a .json file">Open</button>
       <button id="exportBtn" title="Download JSON">Save</button>
+      <button id="undoBtn" title="Undo the last change to the structure (also from the tables and conversions)">Undo</button>
+      <button class="wbtn" data-panel="left" data-dir="-1" aria-label="Compress the control structure panel" title="Compress the control structure panel (more room for the analysis)">⇤</button>
+      <button class="wbtn" data-panel="left" data-dir="1" aria-label="Expand the control structure panel" title="Expand the control structure panel (½ → ⅔ → ¾)">⇥</button>
       <input type="file" id="fileInput" accept=".json,application/json" hidden>
     </div>
-    <textarea id="editor" spellcheck="false" aria-label="STPA JSON"></textarea>
-    <div id="issues" aria-live="polite"></div>
-    <div class="legend">
-      <span><i id="swatchCa"></i>Control action</span><span><i class="fb" id="swatchFb"></i>Feedback</span><span id="counts"></span>
-    </div>
-    <div id="diagramWrap"><svg id="diagram" role="img" aria-label="Control structure diagram"></svg></div>
-    <div id="selBar" aria-live="polite"></div>
-    <div id="safetyCaseWrap">
-      <details id="scLosses" open>
-        <summary>Losses <span class="n" id="scLossesCount">0</span></summary>
-        <div class="tblwrap"><table><thead><tr><th>ID</th><th>Description</th></tr></thead><tbody id="scLossesBody"></tbody></table></div>
-      </details>
-      <details id="scHazards" open>
-        <summary>Hazards <span class="n" id="scHazardsCount">0</span></summary>
-        <div class="tblwrap"><table><thead><tr><th>ID</th><th>Description</th><th>Losses</th></tr></thead><tbody id="scHazardsBody"></tbody></table></div>
-      </details>
-      <details id="scUcas">
-        <summary>Unsafe Control Actions <span class="n" id="scUcasCount">0</span></summary>
-        <div class="tblwrap"><table><thead><tr><th>ID</th><th>Type</th><th>Control action</th><th>Context</th><th>Hazards</th></tr></thead><tbody id="scUcasBody"></tbody></table></div>
-      </details>
-      <details id="scConstraints" open>
-        <summary>Safety constraints <span class="n" id="scConstraintsCount">0</span></summary>
-        <div class="tblwrap"><table><thead><tr><th>ID</th><th>Description</th><th>Hazards</th></tr></thead><tbody id="scConstraintsBody"></tbody></table></div>
-      </details>
+    <div class="pbody">
+      <section class="view" id="vJson" aria-label="JSON">
+        <div class="vbar"><button class="vtitle" type="button">JSON</button></div>
+        <div class="vbody"><textarea id="editor" spellcheck="false" aria-label="STPA JSON"></textarea></div>
+      </section>
+      <div id="issues" aria-live="polite"></div>
+      <section class="view" id="vDiagram" aria-label="Diagram">
+        <div class="vbar"><button class="vtitle" type="button">Diagram</button></div>
+        <div class="vbody">
+          <div class="legend">
+            <span><i id="swatchCa"></i>Control action</span><span><i class="fb" id="swatchFb"></i>Feedback</span><span id="counts"></span>
+          </div>
+          <div id="diagramWrap"><svg id="diagram" role="img" aria-label="Control structure diagram"></svg></div>
+          <div id="selBar" aria-live="polite"></div>
+        </div>
+      </section>
+      <section class="view" id="vStructure" aria-label="Structure tables">
+        <div class="vbar"><button class="vtitle" type="button">Blocks, control actions and feedback</button></div>
+        <div class="vbody tables" id="structureWrap">
+          <details id="stBlocks" open>
+            <summary>Process blocks <span class="n" id="stBlocksCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>Type</th><th>Name</th><th>Details</th><th></th></tr></thead><tbody id="stBlocksBody"></tbody></table>
+              <div class="adds" id="stBlocksAdd"></div></div>
+          </details>
+          <details id="stCas" open>
+            <summary>Control actions <span class="n" id="stCasCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>From</th><th>To</th><th>Labels (one per line)</th><th></th></tr></thead><tbody id="stCasBody"></tbody></table>
+              <div class="adds" id="stCasAdd"></div></div>
+          </details>
+          <details id="stFbs" open>
+            <summary>Feedback <span class="n" id="stFbsCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>From</th><th>To</th><th>Labels (one per line)</th><th>Latency ms</th><th></th></tr></thead><tbody id="stFbsBody"></tbody></table>
+              <div class="adds" id="stFbsAdd"></div></div>
+          </details>
+        </div>
+      </section>
+      <section class="view" id="vSafety" aria-label="Safety case">
+        <div class="vbar"><button class="vtitle" type="button">Safety case</button></div>
+        <div class="vbody tables" id="safetyCaseWrap">
+          <details id="scLosses" open>
+            <summary>Losses <span class="n" id="scLossesCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>Description</th></tr></thead><tbody id="scLossesBody"></tbody></table></div>
+          </details>
+          <details id="scHazards" open>
+            <summary>Hazards <span class="n" id="scHazardsCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>Description</th><th>Losses</th></tr></thead><tbody id="scHazardsBody"></tbody></table></div>
+          </details>
+          <details id="scUcas">
+            <summary>Unsafe Control Actions <span class="n" id="scUcasCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>Type</th><th>Control action</th><th>Context</th><th>Hazards</th></tr></thead><tbody id="scUcasBody"></tbody></table></div>
+          </details>
+          <details id="scConstraints" open>
+            <summary>Safety constraints <span class="n" id="scConstraintsCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>Description</th><th>Hazards</th></tr></thead><tbody id="scConstraintsBody"></tbody></table></div>
+          </details>
+        </div>
+      </section>
     </div>
   </section>
 
+  <div id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize the panels" tabindex="0" title="Drag to resize the panels (arrow keys work too; double-click resets)"></div>
+
   <!-- ───────────── Right: analysis chat ───────────── -->
-  <section class="panel" aria-label="Analysis">
+  <section class="panel" id="rightPanel" aria-label="Analysis">
     <div class="bar">
       <h2>Analysis</h2>
       <button id="clearBtn" title="Start a new conversation">New chat</button>
       <button id="saveLogBtn" title="Download conversation as Markdown">Export .md</button>
       <button id="toolsBtn" type="button" title="Show or hide the tool-call rows in the chat">Hide tool calls</button>
+      <button class="wbtn" data-panel="right" data-dir="-1" aria-label="Compress the analysis panel" title="Compress the analysis panel (more room for the control structure)">⇥</button>
+      <button class="wbtn" data-panel="right" data-dir="1" aria-label="Expand the analysis panel" title="Expand the analysis panel">⇤</button>
     </div>
     <div class="quick" id="quick"></div>
     <div id="scopeLine">
@@ -344,8 +421,8 @@ const $ = (id) => document.getElementById(id);
        (type: not_provided | provided_unsafe | wrong_timing | wrong_duration),
      controllers[{id,name,level?,process_model:{variables[],assumptions[]}}],
      controlled_processes[{id,name,states[]}],
-     control_actions[{id,source,target,action,parameters[]}],
-     feedback[{id,source,target,signal,latency_tolerance_ms?}],
+     control_actions[{id,source,target,action,parameters[]}]   (action: a label or a list of labels),
+     feedback[{id,source,target,signal,latency_tolerance_ms?}]   (signal: a label or a list of labels),
      actuators[{id,name,target,actuation?,converted_from?}]   (target: a controlled process),
      sensors[{id,name,source,measures?,converted_from?}]       (source: a controlled process)
    A control action may target another controller (hierarchical structures) or an
@@ -525,12 +602,16 @@ function validateModel(m) {
     if (!ca || !ca.id) return;
     if (!isCtrl(ca.source)) errors.push(`Control action ${ca.id}: source "${ca.source}" is not a controller`);
     if (!isNode(ca.target)) errors.push(`Control action ${ca.id}: target "${ca.target}" does not exist`);
-    if (!ca.action) warnings.push(`Control action ${ca.id} has no "action" name`);
+    if (ca.action !== undefined && !(typeof ca.action === "string" || (Array.isArray(ca.action) && ca.action.every((x) => typeof x === "string"))))
+      errors.push(`Control action ${ca.id}: "action" must be a label or a list of labels`);
+    else if (!labelsOf(ca.action).length) warnings.push(`Control action ${ca.id} has no "action" label`);
   });
   fbs.forEach((fb) => {
     if (!fb || !fb.id) return;
     if (!isNode(fb.source)) errors.push(`Feedback ${fb.id}: source "${fb.source}" does not exist`);
     if (!isCtrl(fb.target)) errors.push(`Feedback ${fb.id}: target "${fb.target}" is not a controller`);
+    if (fb.signal !== undefined && !(typeof fb.signal === "string" || (Array.isArray(fb.signal) && fb.signal.every((x) => typeof x === "string"))))
+      errors.push(`Feedback ${fb.id}: "signal" must be a label or a list of labels`);
     if (fb.latency_tolerance_ms !== undefined && !(typeof fb.latency_tolerance_ms === "number" && fb.latency_tolerance_ms >= 0))
       errors.push(`Feedback ${fb.id}: latency_tolerance_ms must be a non-negative number`);
   });
@@ -552,7 +633,7 @@ function validateModel(m) {
   cas.forEach((ca) => {
     if (!ca || !isCtrl(ca.source) || !isNode(ca.target)) return;
     if (!fbs.some((fb) => fb && fb.target === ca.source && (fb.source === ca.target || measured(fb.source) === acted(ca.target))))
-      warnings.push(`Open loop: no feedback from "${acted(ca.target)}" to "${ca.source}" for ${ca.id} (${ca.action})`);
+      warnings.push(`Open loop: no feedback from "${acted(ca.target)}" to "${ca.source}" for ${ca.id} (${labelText(ca.action)})`);
   });
   processes.forEach((p) => {
     if (p && p.id && !cas.some((ca) => ca && ca.target === p.id) && !actuators.some((a) => a && a.target === p.id))
@@ -587,6 +668,9 @@ function svgEl(tag, attrs, text) {
   return el;
 }
 const trunc = (s, n) => (s = String(s ?? "")).length > n ? s.slice(0, n - 1) + "…" : s;
+/* A control action's "action" and a feedback's "signal" hold one label or a list of labels. */
+const labelsOf = (v) => (Array.isArray(v) ? v : [v]).filter((x) => typeof x === "string" && x.trim());
+const labelText = (v) => labelsOf(v).join(" / ");
 /* Width of a label in px, measured with the page font. */
 const measureCtx = document.createElement("canvas").getContext("2d");
 function textWidth(s, px, weight = 400) {
@@ -662,7 +746,8 @@ function renderDiagram(m) {
   // Actuation (actuator → process) and measurement (process → sensor) lines are drawn from the actuator/sensor itself.
   const actuation = acts.map((a) => ({ e: { id: a.id, source: a.id, target: a.target, action: a.actuation || "actuation", synthetic: true }, type: "ca", label: a.actuation || "actuation" }));
   const measurement = sens.map((s) => ({ e: { id: s.id, source: s.source, target: s.id, signal: s.measures || "process feedback", synthetic: true }, type: "fb", label: s.measures || "process feedback" }));
-  [...cas.map((e) => ({ e, type: "ca", label: e.action })), ...fbs.map((e) => ({ e, type: "fb", label: e.signal })), ...actuation, ...measurement].forEach(({ e, type, label }) => {
+  const perLabel = (e, type, v) => (labelsOf(v).length ? labelsOf(v) : [e.id]).map((label) => ({ e, type, label }));
+  [...cas.flatMap((e) => perLabel(e, "ca", e.action)), ...fbs.flatMap((e) => perLabel(e, "fb", e.signal)), ...actuation, ...measurement].forEach(({ e, type, label }) => {
     const a = nodes.get(e.source), b = nodes.get(e.target);
     if (!a || !b || a === b) return;
     const key = type + "|" + e.source + "|" + e.target;
@@ -843,12 +928,14 @@ function renderDiagram(m) {
   routes.forEach(({ g, pts }) => {
     const attrs = { d: "M" + pts.map((p) => p.join(",")).join(" L"), class: g.type, "marker-end": `url(#ah-${g.type})` };
     const synthetic = g.edges[0].e.synthetic;
-    if (!synthetic) attrs["data-sel"] = g.edges.map(({ e }) => e.id).join(",");
+    const edgeIds = [...new Set(g.edges.map(({ e }) => e.id))];
+    if (!synthetic) attrs["data-sel"] = edgeIds.join(",");
     if (g.type === "ca" && !synthetic) attrs["data-ids"] = attrs["data-sel"];
     const path = svgEl("path", attrs);
     path.appendChild(svgEl("title", {}, synthetic
       ? `${g.type === "ca" ? "Actuation" : "Process feedback"}: ${g.edges[0].label} (${g.edges[0].e.source} → ${g.edges[0].e.target})`
-      : g.edges.map(({ e }) => `${e.id}: ${g.type === "ca" ? e.action : e.signal} (${e.source} → ${e.target})`).join("\n") + "\nShift+click to select"));
+      : edgeIds.map((id) => g.edges.find(({ e }) => e.id === id).e).map((e) => `${e.id}: ${labelText(g.type === "ca" ? e.action : e.signal)} (${e.source} → ${e.target})`).join("\n")
+        + "\nClick to edit, Shift+click to select"));
     if (g.type === "ca" && !synthetic) path.addEventListener("click", (ev) => { if (!ev.shiftKey) setFocus(g.edges[0].e.id); });
     edgeLayer.appendChild(path);
   });
@@ -857,7 +944,7 @@ function renderDiagram(m) {
     if (!e.synthetic) attrs["data-sel"] = e.id;
     if (type === "ca" && !e.synthetic) attrs["data-id"] = e.id;
     const lbl = svgEl("text", attrs, label);
-    lbl.appendChild(svgEl("title", {}, e.synthetic ? label : `${e.id}: ${type === "ca" ? e.action : e.signal}`));
+    lbl.appendChild(svgEl("title", {}, e.synthetic ? label : `${e.id}: ${labelText(type === "ca" ? e.action : e.signal)}\nClick to edit, Shift+click to select`));
     if (type === "ca" && !e.synthetic) lbl.addEventListener("click", (ev) => { if (!ev.shiftKey) setFocus(e.id); });
     labelLayer.appendChild(lbl);
   });
@@ -871,7 +958,7 @@ function renderDiagram(m) {
       ? `${n.name}\nVariables: ${(n.process_model?.variables || []).join(", ")}\nAssumptions: ${(n.process_model?.assumptions || []).join("; ")}`
       : n.kind === "act" ? `${n.name}\nActuates ${n.target}${n.actuation ? ": " + n.actuation : ""}`
       : n.kind === "sens" ? `${n.name}\nMeasures ${n.source}${n.measures ? ": " + n.measures : ""}`
-      : `${n.name}\nStates: ${(n.states || []).join(", ")}`) + "\nShift+click to select"));
+      : `${n.name}\nStates: ${(n.states || []).join(", ")}`) + "\nClick to edit, Shift+click to select"));
     nodeLayer.appendChild(g);
   });
   root.append(edgeLayer, nodeLayer, labelLayer);
@@ -905,11 +992,12 @@ function toggleSelected(ids) {
   ids.forEach((id) => (on ? next.add(id) : next.delete(id)));
   setSelection(next);
 }
-const itemLabel = ({ kind, obj }) => obj.name || (kind === "control_actions" ? obj.action : obj.signal) || obj.id;
+const itemLabel = ({ kind, obj }) => obj.name || labelText(kind === "control_actions" ? obj.action : obj.signal) || obj.id;
 
 function applySelection() {
   document.querySelectorAll("#diagram [data-sel]").forEach((el) => {
     el.classList.toggle("sel", el.dataset.sel.split(",").some((id) => selection.has(id)));
+    el.classList.toggle("editing", !!editingId && el.dataset.sel.split(",").includes(editingId));
   });
   const items = selectedItems(), bar = $("selBar");
   bar.replaceChildren();
@@ -936,12 +1024,18 @@ function applySelection() {
     const procIds = new Set((currentModel.controlled_processes || []).map((p) => p && p.id));
     const caOk = items.filter((it) => it.kind === "control_actions" && procIds.has(it.obj.target));
     const fbOk = items.filter((it) => it.kind === "feedback" && procIds.has(it.obj.source));
-    const back = revertTargets(currentModel, items);
+    const blocks = items.filter((it) => it.kind in BLOCK_KINDS);
+    const sw = document.createElement("select");
+    sw.title = "Change the type of the selected process blocks; their ids, names and links stay";
+    sw.setAttribute("aria-label", "Switch the selected blocks to another type");
+    sw.disabled = !blocks.length;
+    sw.appendChild(new Option("Switch to…", ""));
+    for (const k in BLOCK_KINDS) sw.appendChild(new Option(BLOCK_KINDS[k].toLowerCase(), k));
+    sw.addEventListener("change", () => { if (sw.value) switchSelected(sw.value); });
     bar.append(
       btn("Convert to actuator", "Insert an actuator between each selected control action and the process it acts on", () => convertSelected("actuator"), !caOk.length),
       btn("Convert to sensor", "Insert a sensor between the process and each selected feedback", () => convertSelected("sensor"), !fbOk.length),
-      btn("Back to control action", "Remove the actuator: the selected control actions (or every control action into the selected actuators) act on the process directly", () => revertSelected("actuator"), !back.cas.length),
-      btn("Back to feedback", "Remove the sensor: the selected feedback (or all feedback from the selected sensors) comes from the process directly", () => revertSelected("sensor"), !back.fbs.length),
+      sw,
       btn("Clear", "Clear the selection (analyse the whole structure)", () => setSelection([])));
   }
   renderScopeLine(items);
@@ -956,9 +1050,11 @@ function renderScopeLine(items) {
 }
 
 $("diagram").addEventListener("click", (e) => {
-  if (!e.shiftKey) return;
   const el = e.target.closest("[data-sel]");
-  if (el) toggleSelected(el.dataset.sel.split(","));
+  if (!el) return;
+  const ids = el.dataset.sel.split(",");
+  if (e.shiftKey) toggleSelected(ids);
+  if (!e.shiftKey || selection.has(ids[0])) focusRow(ids[0]);
 });
 
 /* Conversions prepare for a deeper level of analysis: a control action that ends at a controlled process
@@ -976,13 +1072,13 @@ function convertSelected(to) {
   selectedItems(m).forEach(({ kind, obj }) => {
     if (to === "actuator" && kind === "control_actions" && procIds.has(obj.target)) {
       const id = nextId(m, "a");
-      (m.actuators ||= []).push({ id, name: `${obj.action || obj.id} actuator`, target: obj.target, actuation: "", converted_from: obj.id });
+      (m.actuators ||= []).push({ id, name: `${labelText(obj.action) || obj.id} actuator`, target: obj.target, actuation: "", converted_from: obj.id });
       obj.target = id;
       next.delete(obj.id); next.add(id); done.push(`${obj.id} → actuator ${id}`);
     }
     if (to === "sensor" && kind === "feedback" && procIds.has(obj.source)) {
       const id = nextId(m, "s");
-      (m.sensors ||= []).push({ id, name: `${obj.signal || obj.id} sensor`, source: obj.source, measures: "", converted_from: obj.id });
+      (m.sensors ||= []).push({ id, name: `${labelText(obj.signal) || obj.id} sensor`, source: obj.source, measures: "", converted_from: obj.id });
       obj.source = id;
       next.delete(obj.id); next.add(id); done.push(`${obj.id} → sensor ${id}`);
     }
@@ -993,39 +1089,37 @@ function convertSelected(to) {
   setStatus(`Converted ${done.join(", ")}. Ctrl/⌘+Z in the editor undoes it.`);
 }
 
-/* The reverse conversions: a control action that ends at an actuator goes straight to the actuator's process,
-   and feedback that starts at a sensor comes straight from the sensor's process. Selecting the actuator or sensor
-   itself reverts every link through it. An actuator or sensor that nothing points at any more is removed. */
-function revertTargets(m, items) {
-  const act = new Set((m.actuators || []).map((a) => a && a.id)), sens = new Set((m.sensors || []).map((s) => s && s.id));
-  const pick = new Set(items.map((it) => it.id));
-  const cas = (m.control_actions || []).filter((ca) => ca && act.has(ca.target) && (pick.has(ca.id) || pick.has(ca.target)));
-  const fbs = (m.feedback || []).filter((fb) => fb && sens.has(fb.source) && (pick.has(fb.id) || pick.has(fb.source)));
-  return { cas, fbs };
+/* Switching changes a process block's type (controller, controlled process, actuator, sensor) and keeps its id,
+   name and links. Fields that only the old type has are kept under "switched_from" and come back when the
+   block is switched back, so an actuator can become a controlled process and later an actuator again. */
+const BLOCK_KINDS = { controllers: "Controller", controlled_processes: "Controlled process", actuators: "Actuator", sensors: "Sensor" };
+const TYPE_FIELDS = { controllers: ["level", "process_model"], controlled_processes: ["states"],
+  actuators: ["target", "actuation", "converted_from"], sensors: ["source", "measures", "converted_from"] };
+const blockKindOf = (m, id) => Object.keys(BLOCK_KINDS).find((k) => Array.isArray(m[k]) && m[k].some((x) => x && x.id === id));
+function switchBlock(m, id, to) {
+  const from = blockKindOf(m, id);
+  if (!from || from === to) return false;
+  const i = m[from].findIndex((x) => x && x.id === id);
+  const { switched_from: prev, ...obj } = m[from][i], saved = {};
+  m[from].splice(i, 1);
+  if (!m[from].length) delete m[from];
+  const empty = (v) => v === "" || v === null || (Array.isArray(v) ? !v.length : typeof v === "object" && Object.values(v).every(empty));
+  TYPE_FIELDS[from].forEach((f) => { if (f in obj) { if (!empty(obj[f])) saved[f] = obj[f]; delete obj[f]; } });
+  const firstProc = (m.controlled_processes || []).find((p) => p && p.id && p.id !== id)?.id || "";
+  const defaults = { controllers: { process_model: { variables: [], assumptions: [] } }, controlled_processes: { states: [] },
+    actuators: { target: firstProc, actuation: "" }, sensors: { source: firstProc, measures: "" } }[to];
+  const restored = prev && prev.section === to ? (({ section, ...rest }) => rest)(prev) : {};
+  const next = { ...obj, ...defaults, ...restored };
+  if (Object.keys(saved).length) next.switched_from = { section: from, ...saved };
+  (m[to] ||= []).push(next);
+  return true;
 }
-function revertSelected(from) {
-  const m = structuredClone(currentModel), done = [], next = new Set(selection);
-  const { cas, fbs } = revertTargets(m, selectedItems(m));
-  const links = from === "actuator" ? cas : fbs, key = from === "actuator" ? "target" : "source";
-  const nodes = new Map((m[from === "actuator" ? "actuators" : "sensors"] || []).filter((x) => x && x.id).map((x) => [x.id, x]));
-  const touched = new Set();
-  links.forEach((obj) => {
-    const node = nodes.get(obj[key]);
-    touched.add(node.id);
-    obj[key] = from === "actuator" ? node.target : node.source;
-    next.add(obj.id); done.push(`${obj.id} → ${obj[key]}`);
-  });
-  if (!done.length) return;
-  const used = (id) => (m.control_actions || []).some((ca) => ca && ca.target === id) ||
-    (m.feedback || []).some((fb) => fb && (fb.source === id || fb.target === id));
-  const gone = [...touched].filter((id) => !used(id));
-  const sec = from === "actuator" ? "actuators" : "sensors";
-  m[sec] = m[sec].filter((x) => !(x && gone.includes(x.id)));
-  if (!m[sec].length) delete m[sec];
-  gone.forEach((id) => next.delete(id));
+function switchSelected(to) {
+  const m = structuredClone(currentModel);
+  const done = selectedItems(m).filter((it) => it.kind in BLOCK_KINDS && switchBlock(m, it.id, to)).map((it) => it.id);
+  if (!done.length) { applySelection(); return; }
   replaceEditor(m);
-  setSelection(next);
-  setStatus(`Reverted ${done.join(", ")}${gone.length ? `; removed ${from} ${gone.join(", ")}` : ""}. Ctrl/⌘+Z in the editor undoes it.`);
+  setStatus(`Switched ${done.join(", ")} to ${BLOCK_KINDS[to].toLowerCase()}. Undo reverts it.`);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1104,7 +1198,7 @@ function renderSafetyCase(m) {
   const hazards = (m.hazards || []).filter((x) => x && x.id);
   const constraints = (m.constraints || []).filter((x) => x && x.id);
   const ucas = (m.ucas || []).filter((x) => x && x.id);
-  const caLabel = (id) => { const ca = (m.control_actions || []).find((c) => c && c.id === id); return ca ? `${ca.action || ca.id} (${id})` : id; };
+  const caLabel = (id) => { const ca = (m.control_actions || []).find((c) => c && c.id === id); return ca ? `${labelText(ca.action) || ca.id} (${id})` : id; };
 
   $("scLossesCount").textContent = losses.length;
   buildScTable("scLossesBody", losses, [
@@ -1157,6 +1251,261 @@ function applyFocus() {
   });
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   3c. Structure tables — process blocks, control actions and feedback as rows
+   of fields. They show the last structure that parsed (validation errors are
+   allowed, so a half-finished change can be completed here). Each change is
+   written to the JSON with replaceEditor, so Undo / Ctrl+Z reverts it.
+   Clicking an element in the diagram opens and focuses its row.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const ID_PREFIX = { controllers: "c", controlled_processes: "p", actuators: "a", sensors: "s", control_actions: "ca", feedback: "fb" };
+const asList = (v) => Array.isArray(v) ? v : (v === undefined || v === null || v === "" ? [] : [v]);
+const splitLines = (text) => text.split("\n").map((x) => x.trim()).filter(Boolean);
+let editingId = null;   // id of the row whose fields have focus; its diagram element is highlighted
+
+/** Apply `mutate` to a copy of the parsed JSON and write it back; focus returns to the field with key `focusKey`. */
+function editStructure(mutate, msg, focusKey) {
+  const { model } = parseModel($("editor").value);
+  if (!model || typeof model !== "object" || Array.isArray(model)) { setStatus("Fix the JSON syntax first: the tables edit the parsed structure."); return; }
+  const m = structuredClone(model);
+  if (mutate(m) === false) return;
+  const active = document.activeElement, key = focusKey || active?.dataset?.key;
+  const range = !focusKey && typeof active?.selectionStart === "number" ? [active.selectionStart, active.selectionEnd] : null;
+  replaceEditor(m);
+  const el = key && document.querySelector(`#structureWrap [data-key="${CSS.escape(key)}"]`);
+  if (el) { el.focus({ preventScroll: true }); if (range) el.setSelectionRange(...range); }
+  if (msg) setStatus(msg + " Undo reverts it.");
+}
+/** (m) => fn(item, m) for the element `id` in section `k`; false (no change) when it is gone. */
+const withItem = (k, id, fn) => (m) => { const x = (Array.isArray(m[k]) ? m[k] : []).find((e) => e && e.id === id); return x ? fn(x, m) : false; };
+
+function stInput(key, value, onValue, { label, ...attrs } = {}) {
+  const el = Object.assign(document.createElement("input"), { type: "text", value: value ?? "", ...attrs });
+  el.dataset.key = key;
+  if (label) el.setAttribute("aria-label", label);
+  // Commit after the browser has moved focus (Tab), so the re-rendered table can put it back in the right field.
+  el.addEventListener("change", () => setTimeout(() => editStructure((m) => onValue(m, el.value)), 0));
+  return el;
+}
+function stLines(key, values, onValue, placeholder) {
+  const el = Object.assign(document.createElement("textarea"), { value: asList(values).join("\n"), placeholder, rows: Math.max(1, asList(values).length) });
+  el.dataset.key = key;
+  el.addEventListener("change", () => setTimeout(() => editStructure((m) => onValue(m, splitLines(el.value))), 0));
+  return el;
+}
+function stSelect(key, options, value, onValue, label) {
+  const el = document.createElement("select");
+  el.dataset.key = key;
+  el.setAttribute("aria-label", label);
+  options.forEach(([v, text]) => el.appendChild(new Option(text, v)));
+  if (!options.some(([v]) => v === value)) el.appendChild(new Option(value ? `${value} (missing)` : "—", value ?? ""));
+  el.value = value ?? "";
+  el.addEventListener("change", () => setTimeout(() => editStructure((m) => onValue(m, el.value)), 0));
+  return el;
+}
+const fld = (label, el) => { const l = document.createElement("label"); l.className = "fld"; l.append(label, el); return l; };
+
+function renderStructure(m) {
+  if (!m || typeof m !== "object" || Array.isArray(m)) return;
+  const list = (k) => (Array.isArray(m[k]) ? m[k] : []).filter((x) => x && typeof x === "object" && x.id);
+  const blocks = Object.keys(BLOCK_KINDS).flatMap((k) => list(k).map((obj) => ({ k, obj })));
+  const nodeName = ({ obj }) => `${obj.id} · ${trunc(obj.name || "", 24)}`;
+  const opts = (pred) => blocks.filter(pred).map((b) => [b.obj.id, nodeName(b)]);
+  const ctrlOpts = opts((b) => b.k === "controllers"), procOpts = opts((b) => b.k === "controlled_processes"), anyOpts = opts(() => true);
+  const del = (title, onClick) => { const b = document.createElement("button"); b.type = "button"; b.className = "del"; b.textContent = "✕"; b.title = title; b.setAttribute("aria-label", title); b.addEventListener("click", onClick); return b; };
+  const row = (id, cells) => {
+    const tr = document.createElement("tr");
+    tr.dataset.row = id;
+    cells.forEach((c, i) => { const td = document.createElement("td"); if (!i) { td.className = "idc"; td.textContent = id; } else td.append(...[].concat(c)); tr.appendChild(td); });
+    tr.classList.toggle("cur", id === editingId);
+    return tr;
+  };
+
+  $("stBlocksCount").textContent = blocks.length;
+  $("stBlocksBody").replaceChildren(...blocks.map(({ k, obj }) => {
+    const id = obj.id, set = (f) => (m2, v) => withItem(k, id, (x) => { if ((x[f] ?? "") === v) return false; x[f] = v; })(m2);
+    const type = stSelect(id + "|type", Object.entries(BLOCK_KINDS), k, (m2, v) => switchBlock(m2, id, v), `Type of ${id}`);
+    const name = stInput(id + "|name", obj.name, set("name"), { placeholder: "Name", label: `Name of ${id}` });
+    name.dataset.focus = "";
+    const lines = (f, label, get, put) => fld(label, stLines(`${id}|${f}`, get(obj), (m2, v) => withItem(k, id, (x) => {
+      if (JSON.stringify(asList(get(x))) === JSON.stringify(v)) return false; put(x, v);
+    })(m2)));
+    const pm = (f) => [(x) => x.process_model?.[f], (x, v) => { x.process_model = { ...(x.process_model || {}), [f]: v }; }];
+    const details = k === "controllers" ? [lines("vars", "Process-model variables", ...pm("variables")), lines("assumptions", "Assumptions", ...pm("assumptions"))]
+      : k === "controlled_processes" ? [lines("states", "States", (x) => x.states, (x, v) => { x.states = v; })]
+      : k === "actuators" ? [fld("Acts on", stSelect(id + "|target", procOpts, obj.target, set("target"), `Process ${id} acts on`)),
+          fld("Actuation", stInput(id + "|actuation", obj.actuation, set("actuation"), { label: `Actuation of ${id}` }))]
+      : [fld("Measures process", stSelect(id + "|source", procOpts, obj.source, set("source"), `Process ${id} measures`)),
+          fld("Measures", stInput(id + "|measures", obj.measures, set("measures"), { label: `What ${id} measures` }))];
+    return row(id, [null, type, name, details, del(`Delete ${id} and its control actions and feedback`, () => deleteElement(id))]);
+  }));
+
+  const linkRows = (k, labelKey, fromOpts, toOpts) => list(k).map((obj) => {
+    const id = obj.id, set = (f) => (m2, v) => withItem(k, id, (x) => { if ((x[f] ?? "") === v) return false; x[f] = v; })(m2);
+    const labels = stLines(`${id}|labels`, labelsOf(obj[labelKey]), (m2, v) => withItem(k, id, (x) => {
+      if (JSON.stringify(labelsOf(x[labelKey])) === JSON.stringify(v)) return false;
+      x[labelKey] = v.length === 1 ? v[0] : v.length ? v : "";
+    })(m2), "One label per line");
+    labels.dataset.focus = "";
+    labels.setAttribute("aria-label", `Labels of ${id}`);
+    const cells = [null, stSelect(id + "|source", fromOpts, obj.source, set("source"), `${id} from`), stSelect(id + "|target", toOpts, obj.target, set("target"), `${id} to`), labels];
+    if (k === "feedback") cells.push(stInput(id + "|latency", obj.latency_tolerance_ms, (m2, v) => withItem(k, id, (x) => {
+      const n = v.trim() === "" ? undefined : Number(v);
+      if (n === x.latency_tolerance_ms) return false;
+      if (n === undefined) delete x.latency_tolerance_ms; else x.latency_tolerance_ms = Number.isFinite(n) ? n : v;
+    })(m2), { inputMode: "numeric", label: `Latency tolerance of ${id} in ms` }));
+    cells.push(del(`Delete ${id}`, () => deleteElement(id)));
+    return row(id, cells);
+  });
+  $("stCasCount").textContent = list("control_actions").length;
+  $("stCasBody").replaceChildren(...linkRows("control_actions", "action", ctrlOpts, anyOpts));
+  $("stFbsCount").textContent = list("feedback").length;
+  $("stFbsBody").replaceChildren(...linkRows("feedback", "signal", anyOpts, ctrlOpts));
+
+  const addBtn = (text, title, onClick) => { const b = document.createElement("button"); b.type = "button"; b.textContent = text; b.title = title; b.addEventListener("click", onClick); return b; };
+  $("stBlocksAdd").replaceChildren(...Object.entries(BLOCK_KINDS).map(([k, label]) => addBtn(`+ ${label}`, `Add a ${label.toLowerCase()}`, () => addElement(k))));
+  $("stCasAdd").replaceChildren(addBtn("+ Control action", "Add a control action from the selected (or first) controller", () => addElement("control_actions")));
+  $("stFbsAdd").replaceChildren(addBtn("+ Feedback", "Add feedback to the selected (or first) controller", () => addElement("feedback")));
+}
+
+/** Add an element; links start at the selected blocks when there are any, else at the first fitting block. */
+function addElement(k) {
+  let newId;
+  editStructure((m) => {
+    newId = nextId(m, ID_PREFIX[k]);
+    const ids = (kk) => (Array.isArray(m[kk]) ? m[kk] : []).filter((x) => x && x.id).map((x) => x.id);
+    const pick = (cands) => cands.find((id) => selection.has(id)) || cands[0] || "";
+    const ctrls = ids("controllers"), procs = ids("controlled_processes"), others = [...procs, ...ids("actuators"), ...ids("sensors")];
+    const item = k === "controllers" ? { id: newId, name: "", process_model: { variables: [], assumptions: [] } }
+      : k === "controlled_processes" ? { id: newId, name: "", states: [] }
+      : k === "actuators" ? { id: newId, name: "", target: pick(procs), actuation: "" }
+      : k === "sensors" ? { id: newId, name: "", source: pick(procs), measures: "" }
+      : k === "control_actions" ? { id: newId, source: pick(ctrls), target: pick(others) || ctrls.find((c) => c !== pick(ctrls)) || "", action: "" }
+      : { id: newId, source: pick(others), target: pick(ctrls), signal: "" };
+    (Array.isArray(m[k]) ? m[k] : (m[k] = [])).push(item);
+  }, null, null);
+  if (!newId) return;
+  focusRow(newId);
+  setStatus(`Added ${newId}. Undo reverts it.`);
+}
+/** Delete an element; deleting a block also deletes the control actions and feedback that start or end at it. */
+function deleteElement(id) {
+  let removed = [];
+  editStructure((m) => {
+    const links = new Set([id]);
+    ["control_actions", "feedback"].forEach((k) => (Array.isArray(m[k]) ? m[k] : []).forEach((x) => { if (x && (x.source === id || x.target === id)) links.add(x.id); }));
+    STRUCT_KEYS.forEach((k) => {
+      if (!Array.isArray(m[k])) return;
+      removed.push(...m[k].filter((x) => x && links.has(x.id)).map((x) => x.id));
+      m[k] = m[k].filter((x) => !(x && links.has(x.id)));
+    });
+    if (!removed.length) return false;
+  });
+  if (removed.length) setStatus(`Deleted ${removed.join(", ")}. Undo reverts it.`);
+}
+
+/** Open the row of `id` (expanding its view and table), scroll to it and focus its name or labels field. */
+function focusRow(id) {
+  const tr = document.querySelector(`#structureWrap tr[data-row="${CSS.escape(id)}"]`);
+  if (!tr) return;
+  if (viewState.vStructure?.compressed) setView("vStructure", { compressed: false });
+  tr.closest("details").open = true;
+  tr.scrollIntoView({ block: "nearest" });
+  (tr.querySelector("[data-focus]") || tr.querySelector("input, select, textarea"))?.focus({ preventScroll: true });
+}
+function markEditing(id) {
+  editingId = id;
+  document.querySelectorAll("#structureWrap tr[data-row]").forEach((tr) => tr.classList.toggle("cur", tr.dataset.row === id));
+  document.querySelectorAll("#diagram [data-sel]").forEach((el) => el.classList.toggle("editing", !!id && el.dataset.sel.split(",").includes(id)));
+}
+$("structureWrap").addEventListener("focusin", (e) => markEditing(e.target.closest("tr[data-row]")?.dataset.row || null));
+$("structureWrap").addEventListener("focusout", (e) => { if (!e.relatedTarget || !$("structureWrap").contains(e.relatedTarget)) markEditing(null); });
+
+/* ── Views and panels ─────────────────────────────────────────────────────
+   Every view (JSON, diagram, structure tables, safety case) can be compressed to its bar or expanded to take
+   the free height. The two panels share the width; the splitter or the panels' Expand/Compress buttons move it
+   in steps (¼ ⅓ ½ ⅔ ¾), so the control structure can take ⅔ or ¾ with the analysis still in view. */
+const VIEW_IDS = ["vJson", "vDiagram", "vStructure", "vSafety"];
+const SPLIT_STEPS = [1 / 4, 1 / 3, 1 / 2, 2 / 3, 3 / 4];
+let viewState = store.get("views", {}) || {};
+let split = clamp(store.get("split", 0.5), 0.25, 0.75, 0.5);
+
+function setView(id, patch) {
+  const st = { ...viewState[id], ...patch };
+  if (patch.expanded) st.compressed = false;
+  if (patch.compressed) st.expanded = false;
+  viewState = { ...viewState, [id]: st };
+  store.set("views", viewState);
+  applyViews();
+}
+function applyViews() {
+  VIEW_IDS.forEach((id) => {
+    const v = $(id), st = viewState[id] || {};
+    v.classList.toggle("compressed", !!st.compressed);
+    v.classList.toggle("expanded", !!st.expanded);
+    v.querySelector(".vtitle").setAttribute("aria-expanded", String(!st.compressed));
+    v.querySelector(".vcomp").setAttribute("aria-pressed", String(!!st.compressed));
+    v.querySelector(".vexp").setAttribute("aria-pressed", String(!!st.expanded));
+  });
+}
+VIEW_IDS.forEach((id) => {
+  const bar = $(id).querySelector(".vbar"), name = bar.querySelector(".vtitle").textContent;
+  const mk = (cls, text, title, onClick) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = cls; b.textContent = text; b.title = title;
+    b.addEventListener("click", onClick);
+    bar.appendChild(b);
+  };
+  bar.querySelector(".vtitle").title = `Compress or show ${name}`;
+  bar.querySelector(".vtitle").addEventListener("click", () => setView(id, { compressed: !viewState[id]?.compressed }));
+  mk("vcomp", "Compress", `Compress ${name} to its bar (press again to show it)`, () => setView(id, { compressed: !viewState[id]?.compressed }));
+  mk("vexp", "Expand", `Let ${name} take the free height (press again to restore)`, () => setView(id, { expanded: !viewState[id]?.expanded }));
+});
+
+function setSplit(v) {
+  split = clamp(v, 0.25, 0.75, 0.5);
+  const main = document.querySelector("main");
+  main.style.setProperty("--left", split + "fr");
+  main.style.setProperty("--right", 1 - split + "fr");
+  const sp = $("splitter");
+  sp.setAttribute("aria-valuenow", String(Math.round(split * 100)));
+  sp.setAttribute("aria-valuetext", `Control structure ${Math.round(split * 100)} %, analysis ${Math.round((1 - split) * 100)} %`);
+  document.querySelectorAll(".wbtn").forEach((b) => {
+    const grow = (b.dataset.panel === "left") === (b.dataset.dir === "1");
+    b.disabled = grow ? split > 0.74 : split < 0.26;
+  });
+  store.set("split", split);
+}
+document.querySelectorAll(".wbtn").forEach((b) => b.addEventListener("click", () => {
+  const grow = (b.dataset.panel === "left") === (b.dataset.dir === "1");
+  const next = grow ? SPLIT_STEPS.find((x) => x > split + 0.01) : [...SPLIT_STEPS].reverse().find((x) => x < split - 0.01);
+  if (next !== undefined) setSplit(next);
+}));
+(() => {
+  const sp = $("splitter"), main = document.querySelector("main");
+  sp.setAttribute("aria-valuemin", "25"); sp.setAttribute("aria-valuemax", "75");
+  const at = (x) => {
+    const r = main.getBoundingClientRect(), cs = getComputedStyle(main);
+    const left = r.left + parseFloat(cs.paddingLeft), width = r.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - sp.offsetWidth;
+    return (x - left - sp.offsetWidth / 2) / width;
+  };
+  sp.addEventListener("pointerdown", (e) => { sp.setPointerCapture(e.pointerId); sp.classList.add("drag"); e.preventDefault(); });
+  sp.addEventListener("pointermove", (e) => { if (sp.hasPointerCapture(e.pointerId)) setSplit(at(e.clientX)); });
+  sp.addEventListener("pointerup", (e) => { sp.releasePointerCapture(e.pointerId); sp.classList.remove("drag"); });
+  sp.addEventListener("dblclick", () => setSplit(0.5));
+  sp.addEventListener("keydown", (e) => {
+    const step = { ArrowLeft: -0.05, ArrowRight: 0.05 }[e.key];
+    if (step) { setSplit(split + step); e.preventDefault(); }
+    else if (e.key === "Home" || e.key === "End") { setSplit(e.key === "Home" ? 0.25 : 0.75); e.preventDefault(); }
+  });
+})();
+
+$("undoBtn").addEventListener("click", () => {
+  const ed = $("editor");
+  ed.focus({ preventScroll: true });
+  if (document.execCommand("undo")) { clearTimeout(editTimer); refreshEditor(); }
+});
+
 /* ── Editor wiring ───────────────────────────────────────────────────────── */
 let currentModel = null;      // last structure that parsed without errors
 let lastValidation = { errors: [], warnings: [] };
@@ -1169,6 +1518,7 @@ function refreshEditor() {
   const add = (cls, msg) => { const d = document.createElement("div"); d.className = cls; d.textContent = msg; issues.appendChild(d); };
   const { model, error } = parseModel(text);
   if (error) { add("err", error); lastValidation = { errors: [error], warnings: [] }; return; }
+  renderStructure(model);
   lastValidation = validateModel(model);
   lastValidation.errors.forEach((e) => add("err", "✕ " + e));
   lastValidation.warnings.forEach((w) => add("warn", "⚠ " + w));
@@ -1185,20 +1535,29 @@ function setEditor(obj) { $("editor").value = typeof obj === "string" ? obj : JS
 /** Like setEditor, but as an edit the browser can undo (Ctrl/⌘+Z in the editor). */
 function replaceEditor(obj) {
   const ed = $("editor"), back = document.activeElement, text = JSON.stringify(obj, null, 2);
-  ed.focus(); ed.select();
-  if (!document.execCommand("insertText", false, text)) ed.value = text;
+  ed.focus({ preventScroll: true }); ed.select();
+  // insertText goes to the focused element, so it is only used when the editor really has focus.
+  if (document.activeElement !== ed || !document.execCommand("insertText", false, text)) ed.value = text;
   ed.setSelectionRange(0, 0); ed.scrollTop = 0;
-  if (back && back !== ed && back.focus) back.focus();
+  if (back && back !== ed && back.focus) back.focus({ preventScroll: true });
   clearTimeout(editTimer); refreshEditor();
 }
 
-/* A patch is a partial structure with "patch": true. Elements whose id exists are merged into the existing
-   element (process_model one level deep), new ids are appended to their section, and ids listed in
-   "remove" are deleted from every section. Asking for patches keeps scoped answers short. */
+/* A patch is a partial structure with "patch": true. Ids listed in "remove" are deleted from every section
+   first; then elements whose id exists are merged into the existing element (process_model one level deep)
+   and new ids are appended to their section. Removing an id and adding it to another section switches its
+   type (e.g. an actuator becomes a controlled process). Asking for patches keeps scoped answers short. */
 const STRUCT_KEYS = ["losses", "hazards", "constraints", "controllers", "controlled_processes", "actuators", "sensors", "control_actions", "feedback", "ucas"];
 function applyPatch(base, patch) {
   const m = structuredClone(base), stats = { added: 0, changed: 0, removed: 0 };
   if (typeof patch.system === "string") m.system = patch.system;
+  const gone = new Set(Array.isArray(patch.remove) ? patch.remove : []);
+  if (gone.size) STRUCT_KEYS.forEach((k) => {
+    if (!Array.isArray(m[k])) return;
+    const n = m[k].length;
+    m[k] = m[k].filter((x) => !(x && gone.has(x.id)));
+    stats.removed += n - m[k].length;
+  });
   STRUCT_KEYS.forEach((k) => {
     if (!Array.isArray(patch[k])) return;
     const list = Array.isArray(m[k]) ? m[k] : (m[k] = []);
@@ -1209,13 +1568,6 @@ function applyPatch(base, patch) {
       const pm = cur.process_model && item.process_model ? { process_model: { ...cur.process_model, ...item.process_model } } : {};
       Object.assign(cur, item, pm); stats.changed++;
     });
-  });
-  const gone = new Set(Array.isArray(patch.remove) ? patch.remove : []);
-  if (gone.size) STRUCT_KEYS.forEach((k) => {
-    if (!Array.isArray(m[k])) return;
-    const n = m[k].length;
-    m[k] = m[k].filter((x) => !(x && gone.has(x.id)));
-    stats.removed += n - m[k].length;
   });
   return { model: m, stats };
 }
@@ -1577,11 +1929,13 @@ const STRUCTURE_PROMPT = `
 Schema additions:
 - "actuators": [{"id": "a1", "name": "…", "target": "<controlled process id>", "actuation": "<what it does to the process>"}]
 - "sensors": [{"id": "s1", "name": "…", "source": "<controlled process id>", "measures": "<quantity measured>"}]
-A control action may target an actuator, and feedback may come from a sensor; the actuator acts on its target process and the sensor measures its source process. Use them when detailing how a controller acts on or observes a process (e.g. redundant or diverse channels).
+A control action may target an actuator, and feedback may come from a sensor; the actuator acts on its target process and the sensor measures its source process. Use them when detailing how a controller acts on or observes a process (e.g. redundant or diverse channels), or when the user asks you to add one.
+- A control action's "action" and a feedback's "signal" may be one label or a list of labels (["Apply brake", "Release brake"]) when one link carries several commands or signals.
 
 Changing the structure: unless the user explicitly asks for the complete structure, do NOT repeat unchanged elements. Return one \`\`\`json block that is a patch:
 {"patch": true, "controlled_processes": [{"id": "p1", "name": "New name"}], "actuators": [{"id": "a2", …}], "remove": ["ca2"]}
-An element whose id already exists is merged into it (only the fields you give change); a new id is added; ids in "remove" are deleted. Keep existing ids stable so UCAs and links stay valid, and give new elements ids that are not used yet.`;
+Ids in "remove" are deleted first; then an element whose id already exists is merged into it (only the fields you give change) and a new id is added. Keep existing ids stable so UCAs and links stay valid, and give new elements ids that are not used yet.
+To change an element's type (for example an actuator that should become a controlled process, or a process that should become a sensor), list its id in "remove" and add the complete element with the same id to the new section; its control actions and feedback keep pointing at that id.`;
 
 /** User-turn preamble that scopes a question to the selection; the whole structure is already in the system prompt. */
 function scopePreamble(items) {
@@ -1927,7 +2281,9 @@ $("themeBtn").addEventListener("click", () => {
   loadSettings();
   renderQuick();
   setToolsHidden(!!store.get("hideTools"));
-  ["scLosses", "scHazards", "scUcas", "scConstraints"].forEach((id) => {
+  applyViews();
+  setSplit(split);
+  ["scLosses", "scHazards", "scUcas", "scConstraints", "stBlocks", "stCas", "stFbs"].forEach((id) => {
     const el = $(id), saved = store.get("open:" + id);
     if (saved !== null) el.open = saved;
     el.addEventListener("toggle", () => store.set("open:" + id, el.open));
