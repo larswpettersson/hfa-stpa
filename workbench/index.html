@@ -309,7 +309,7 @@
     <label>Model <input type="text" id="local_model" placeholder="llama3.1" list="localModels"></label>
     <datalist id="localModels"></datalist>
     <label>API key (optional, sent as Bearer) <input type="password" id="local_key" autocomplete="off"></label>
-    <p class="hint">Endpoint path picks the wire format: <code>/v1/chat/completions</code> (OpenAI-compatible: Ollama, LM Studio, LocalAI), <code>/api/chat</code> or <code>/api/generate</code> (Ollama native). For Ollama from <code>file://</code>, start it with <code>OLLAMA_ORIGINS=*</code>.</p>
+    <p class="hint">Endpoint path picks the wire format: a base URL ending in <code>/v1</code> or the full <code>/v1/chat/completions</code> (OpenAI-compatible: LiteLLM, Ollama, LM Studio, LocalAI), <code>/api/chat</code> or <code>/api/generate</code> (Ollama native). For Ollama from <code>file://</code>, start it with <code>OLLAMA_ORIGINS=*</code>.</p>
   </fieldset>
 
   <fieldset>
@@ -1300,6 +1300,15 @@ async function readJson(res) {
   return data;
 }
 
+/** A bare OpenAI-compatible base URL (…/v1, as LiteLLM and most tools document it) gets /chat/completions appended;
+    full chat endpoints and Ollama's native /api/chat and /api/generate are used as given. */
+function localChatUrl(endpoint) {
+  const u = new URL(endpoint);
+  if (!/\/(chat\/completions|completions|api\/chat|api\/generate)\/?$/.test(u.pathname))
+    u.pathname = u.pathname.replace(/\/$/, "") + "/chat/completions";
+  return u.href;
+}
+
 /** Models endpoint for a local chat endpoint: …/chat/completions → …/models (OpenAI-compatible, LiteLLM),
     …/api/chat or …/api/generate → …/api/tags (Ollama native). */
 function localModelsUrl(endpoint) {
@@ -1406,7 +1415,7 @@ async function callLLM({ provider, systemPrompt, messages, signal, onProgress })
   }
 
   if (provider === "local") {
-    const endpoint = cfg.local_endpoint || DEFAULTS.local_endpoint;
+    const endpoint = localChatUrl(cfg.local_endpoint || DEFAULTS.local_endpoint);
     const model = cfg.local_model || DEFAULTS.local_model;
     const headers = { "content-type": "application/json" };
     if (cfg.local_key) headers.authorization = "Bearer " + cfg.local_key;
