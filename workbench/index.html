@@ -1963,6 +1963,13 @@ $("modelPick").addEventListener("change", (e) => {
   saveSettings();
 });
 CLAUDE_MODELS.forEach((x) => $("claudeModels").appendChild(new Option(x.label, x.id)));
+// Browsers only suggest datalist entries matching the field's text, so a filled-in model field would hide every
+// other model. Empty the field while it has focus (current id shown as placeholder) and restore it if nothing is picked.
+["claude_model", "gemini_model", "local_model"].forEach((k) => {
+  const el = $(k);
+  el.addEventListener("focus", () => { el.dataset.prev = el.value; el.dataset.ph = el.placeholder; el.placeholder = el.value || el.placeholder; el.value = ""; });
+  el.addEventListener("blur", () => { if (!el.value.trim() && el.dataset.prev) { el.value = el.dataset.prev; saveSettings(); } el.placeholder = el.dataset.ph || ""; });
+});
 
 SETTING_FIELDS.forEach((k) => $(k)?.addEventListener("change", saveSettings));
 // A new provider, key or endpoint can change which models are on offer.
