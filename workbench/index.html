@@ -277,7 +277,8 @@
         <option value="local">Local LLM (Ollama / LM Studio / LocalAI)</option>
       </select>
     </label>
-    <p class="hint">Only the active provider is called. Settings for the others are kept, so you can switch back at any time.</p>
+    <div class="row"><button id="refreshModels" type="button">Refresh model list</button><span id="modelsState" class="pill"></span></div>
+    <p class="hint">Only the active provider is called. Settings for the others are kept, so you can switch back at any time. The model list beside Send is read from the provider's models endpoint.</p>
   </fieldset>
 
   <fieldset data-provider="claude">
@@ -297,14 +298,16 @@
   <fieldset data-provider="gemini">
     <legend>Google Gemini</legend>
     <label>API key <input type="password" id="gemini_key" autocomplete="off"></label>
-    <label>Model <input type="text" id="gemini_model" placeholder="gemini-2.5-pro"></label>
+    <label>Model <input type="text" id="gemini_model" placeholder="gemini-2.5-pro" list="geminiModels"></label>
+    <datalist id="geminiModels"></datalist>
     <p class="hint">Sent as the <code>x-goog-api-key</code> header (not in the URL).</p>
   </fieldset>
 
   <fieldset data-provider="local">
     <legend>Local LLM</legend>
     <label>Endpoint <input type="url" id="local_endpoint" placeholder="http://localhost:11434/v1/chat/completions"></label>
-    <label>Model <input type="text" id="local_model" placeholder="llama3.1"></label>
+    <label>Model <input type="text" id="local_model" placeholder="llama3.1" list="localModels"></label>
+    <datalist id="localModels"></datalist>
     <label>API key (optional, sent as Bearer) <input type="password" id="local_key" autocomplete="off"></label>
     <p class="hint">Endpoint path picks the wire format: <code>/v1/chat/completions</code> (OpenAI-compatible: Ollama, LM Studio, LocalAI), <code>/api/chat</code> or <code>/api/generate</code> (Ollama native). For Ollama from <code>file://</code>, start it with <code>OLLAMA_ORIGINS=*</code>.</p>
   </fieldset>
@@ -1297,6 +1300,52 @@ async function readJson(res) {
   return data;
 }
 
+/** Models endpoint for a local chat endpoint: …/chat/completions → …/models (OpenAI-compatible, LiteLLM),
+    …/api/chat or …/api/generate → …/api/tags (Ollama native). */
+function localModelsUrl(endpoint) {
+  const u = new URL(endpoint);
+  if (/\/api\/(chat|generate)\/?$/.test(u.pathname)) u.pathname = u.pathname.replace(/\/api\/(chat|generate)\/?$/, "/api/tags");
+  else u.pathname = u.pathname.replace(/\/chat\/completions\/?$|\/completions\/?$/, "") .replace(/\/$/, "") + "/models";
+  return u.href;
+}
+
+/** Ask the provider which models it serves. Returns [{ id, label }]. */
+async function listModels(provider) {
+  const cfg = settings;
+  if (provider === "claude") {
+    if (!cfg.claude_key) throw new Error("no API key");
+    const out = [];
+    for (let after = null; ;) {
+      const q = new URLSearchParams({ limit: "1000" }); if (after) q.set("after_id", after);
+      const data = await readJson(await fetch("https://api.anthropic.com/v1/models?" + q, { headers: {
+        "x-api-key": cfg.claude_key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" } }));
+      (data.data || []).forEach((m) => out.push({ id: m.id, label: m.display_name || m.id }));
+      if (!data.has_more || !data.last_id) return out;
+      after = data.last_id;
+    }
+  }
+  if (provider === "gemini") {
+    if (!cfg.gemini_key) throw new Error("no API key");
+    const out = [];
+    for (let page = ""; ;) {
+      const q = new URLSearchParams({ pageSize: "1000" }); if (page) q.set("pageToken", page);
+      const data = await readJson(await fetch("https://generativelanguage.googleapis.com/v1beta/models?" + q, { headers: { "x-goog-api-key": cfg.gemini_key } }));
+      (data.models || []).filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+        .forEach((m) => { const id = m.name.replace(/^models\//, ""); out.push({ id, label: m.displayName || id }); });
+      if (!data.nextPageToken) return out;
+      page = data.nextPageToken;
+    }
+  }
+  if (provider === "local") {
+    const headers = {}; if (cfg.local_key) headers.authorization = "Bearer " + cfg.local_key;
+    const data = await readJson(await fetch(localModelsUrl(cfg.local_endpoint || DEFAULTS.local_endpoint), { headers }));
+    const list = data.data || data.models || [];
+    return list.map((m) => { const id = m.id || m.name || m.model; return { id, label: id }; }).filter((m) => m.id)
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }
+  throw new Error("Unknown provider: " + provider);
+}
+
 async function callLLM({ provider, systemPrompt, messages, signal, onProgress }) {
   const cfg = settings;
 
@@ -1851,13 +1900,42 @@ function saveSettings() {
   store.set("settings", persisted);
   updateBadge();
 }
-/** Fill the model picker beside Send for the current provider; a custom id from Settings is kept as an extra entry. */
+/* Models the active provider reported via listModels(); null until fetched (or when the fetch failed). */
+const fetchedModels = { claude: null, gemini: null, local: null };
+let modelsSeq = 0;
+async function refreshModels() {
+  const p = settings.provider, seq = ++modelsSeq;
+  $("modelsState").textContent = "loading models…";
+  try {
+    const list = await listModels(p);
+    if (seq !== modelsSeq) return;
+    fetchedModels[p] = list;
+    $("modelsState").textContent = `${list.length} models from provider`;
+  } catch (e) {
+    if (seq !== modelsSeq) return;
+    fetchedModels[p] = null;
+    $("modelsState").textContent = p === "local" ? "model list unavailable" : "built-in model list";
+    $("modelsState").title = e.message;
+  }
+  updateBadge();
+}
+
+/** Fill the model picker beside Send for the current provider: the provider's own list when it could be fetched,
+    else the built-in list. A custom id from Settings is kept as an extra entry. */
 function updateBadge() {
   const pick = $("modelPick"), p = settings.provider, cur = providerLabel();
   document.querySelectorAll("#drawer fieldset[data-provider]").forEach((fs) => fs.classList.toggle("active", fs.dataset.provider === p));
   $("providerPill").textContent = $("provider").selectedOptions[0]?.text.replace(/ \(.*\)$/, "") || p;
   pick.replaceChildren();
-  if (p === "claude") {
+  const fetched = fetchedModels[p];
+  if (fetched) {
+    const groups = p === "claude" ? [...new Set(fetched.map((m) => CLAUDE_MODELS.find((x) => x.id === m.id)?.family || "Other"))] : [null];
+    groups.forEach((fam) => {
+      const parent = fam && groups.length > 1 ? pick.appendChild(Object.assign(document.createElement("optgroup"), { label: fam })) : pick;
+      fetched.filter((m) => !fam || (CLAUDE_MODELS.find((x) => x.id === m.id)?.family || "Other") === fam)
+        .forEach((m) => parent.appendChild(new Option(m.label === m.id ? m.id : `${m.label} (${m.id})`, m.id)));
+    });
+  } else if (p === "claude") {
     [...new Set(CLAUDE_MODELS.map((x) => x.family))].forEach((fam) => {
       const og = document.createElement("optgroup");
       og.label = fam;
@@ -1867,6 +1945,8 @@ function updateBadge() {
   } else if (p === "gemini") GEMINI_MODELS.forEach((id) => pick.appendChild(new Option(id, id)));
   if (![...pick.options].some((o) => o.value === cur)) pick.appendChild(new Option(p === "local" ? cur : `${cur} (custom)`, cur));
   pick.value = cur;
+  const dl = $(p + "Models");
+  if (dl && fetched) dl.replaceChildren(...fetched.map((m) => new Option(m.label, m.id)));
 }
 $("modelPick").addEventListener("change", (e) => {
   const field = $(settings.provider + "_model");
@@ -1876,6 +1956,11 @@ $("modelPick").addEventListener("change", (e) => {
 CLAUDE_MODELS.forEach((x) => $("claudeModels").appendChild(new Option(x.label, x.id)));
 
 SETTING_FIELDS.forEach((k) => $(k)?.addEventListener("change", saveSettings));
+// A new provider, key or endpoint can change which models are on offer.
+["provider", "claude_key", "gemini_key", "local_endpoint", "local_key"].forEach((k) => $(k).addEventListener("change", () => {
+  if (k === "provider" || k.startsWith(settings.provider + "_")) refreshModels();
+}));
+$("refreshModels").addEventListener("click", refreshModels);
 $("forgetKeys").addEventListener("click", () => {
   SECRET_FIELDS.forEach((k) => { $(k).value = ""; }); saveSettings(); setStatus("Stored API keys removed.");
 });
@@ -1899,6 +1984,7 @@ $("themeBtn").addEventListener("click", () => {
 (function boot() {
   const theme = store.get("theme"); if (theme) document.documentElement.dataset.theme = theme;
   loadSettings();
+  refreshModels();
   renderQuick();
   setToolsHidden(!!store.get("hideTools"));
   ["scLosses", "scHazards", "scUcas", "scConstraints"].forEach((id) => {
