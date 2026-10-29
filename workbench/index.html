@@ -147,7 +147,9 @@
   .selchip button { border: 0; background: none; padding: 0 5px; font-size: 12px; line-height: 18px; color: var(--fg-muted); }
   #scopeLine { font-size: 12px; color: var(--fg-muted); padding: 6px 10px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   #scopeLine strong { color: var(--fg); font-weight: 600; }
-  #scopeLine label { display: inline-flex; gap: 4px; align-items: center; margin-left: auto; }
+  #scopeLine label { display: inline-flex; gap: 4px; align-items: center; }
+  #scopeLine .folds { display: inline-flex; gap: 6px; margin-left: auto; }
+  #scopeLine .folds button { padding: 2px 8px; font-size: 12px; }
   #modelPick { max-width: 210px; }
   .tables { border-top: 1px solid var(--border); max-height: 32vh; overflow: auto; }
   .tables details { border-bottom: 1px solid var(--border); }
@@ -183,7 +185,18 @@
   #structureWrap .adds { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 6px; }
   #structureWrap .adds button { padding: 2px 8px; font-size: 12px; }
   #structureWrap .note { padding: 6px 10px; font-size: 12px; color: var(--fg-muted); }
-  #log { flex: 1; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; min-height: 160px; }
+  /* The log scrolls as one column: entries keep their full height (flex: none) instead of shrinking into scroll boxes. */
+  #logWrap { position: relative; flex: 1; min-height: 160px; display: flex; flex-direction: column; }
+  #log { flex: 1; min-height: 0; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+  #log > * { flex: none; }
+  #toBottom { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); width: 32px; height: 32px; padding: 0;
+    border-radius: 50%; box-shadow: 0 2px 8px var(--shadow-hover); font-size: 16px; line-height: 1; }
+  #toBottom[hidden] { display: none; }
+  .msg .meta .fold { border: 0; background: none; padding: 0 4px; margin-left: 2px; font-size: 11px; color: var(--fg-muted); vertical-align: baseline; }
+  .msg .meta .fold:hover { color: var(--fg); }
+  .msg .gist { display: none; color: var(--fg-muted); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .msg.folded .gist { display: block; }
+  .msg.folded > .body { display: none; }
   .msg { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; max-width: 100%; overflow-x: auto; }
   .msg.user { background: var(--brand-subtle); align-self: flex-end; max-width: 90%; white-space: pre-wrap; }
   .msg.assistant { background: var(--bg-elev); }
@@ -337,9 +350,16 @@
     <div class="quick" id="quick"></div>
     <div id="scopeLine">
       <span id="scopeText"></span>
+      <span class="folds">
+        <button id="foldAll" type="button" title="Fold every answer to one line">Compress</button>
+        <button id="unfoldAll" type="button" title="Show every answer in full">Expand</button>
+      </span>
       <label title="Off: each question is sent with the control structure and the selection only. On: earlier questions and answers are sent too (more tokens)."><input type="checkbox" id="keep_history"> Send earlier turns</label>
     </div>
-    <div id="log" aria-live="polite"></div>
+    <div id="logWrap">
+      <div id="log" aria-live="polite"></div>
+      <button id="toBottom" type="button" hidden aria-label="Scroll to the latest message" title="Scroll to the latest message">↓</button>
+    </div>
     <div class="status" id="status"></div>
     <form id="chat">
       <textarea id="prompt" placeholder="Ask about the control structure… (Ctrl/⌘+Enter to send)" aria-label="Message"></textarea>
@@ -2171,14 +2191,53 @@ function addMessage(kind, text, meta) {
   if (kind === "user" || kind === "error") div.appendChild(document.createTextNode(text));
   else {
     const body = document.createElement("div");
+    body.className = "body";
     body.innerHTML = renderMarkdown(text); // safe: renderMarkdown escapes all model text
     div.appendChild(body);
     if (kind === "assistant") attachJsonActions(body);
+    if (meta) addFold(div, text);
   }
   $("log").appendChild(div);
-  div.scrollIntoView({ block: "end", behavior: "smooth" });
+  // An answer opens at its first line; questions, errors and tool rows sit at the bottom.
+  div.scrollIntoView({ block: kind === "assistant" ? "start" : "end", behavior: "smooth" });
   transcript.push({ kind, text, meta });
+  updateToBottom();
 }
+
+/** The caret after an answer's meta line folds the answer to one line of its text; the line or the caret opens it again. */
+function addFold(div, text) {
+  const btn = document.createElement("button");
+  btn.type = "button"; btn.className = "fold";
+  const gist = document.createElement("div");
+  gist.className = "gist";
+  gist.textContent = text.replace(/```[\s\S]*?```/g, " [code] ").replace(/[#*_`|>]+|:?-{3,}:?/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+  btn.addEventListener("click", () => setFolded(div, !div.classList.contains("folded")));
+  gist.addEventListener("click", () => setFolded(div, false));
+  div.querySelector(".meta").appendChild(btn);
+  div.querySelector(".body").before(gist);
+  setFolded(div, false);
+}
+function setFolded(div, folded) {
+  const btn = div.querySelector(".meta .fold");
+  div.classList.toggle("folded", folded);
+  btn.textContent = folded ? "▸" : "▾";
+  btn.title = folded ? "Show the answer" : "Hide the answer";
+  btn.setAttribute("aria-label", btn.title);
+  btn.setAttribute("aria-expanded", String(!folded));
+  updateToBottom();
+}
+/** Compress / Expand above the log fold or open every answer that has a caret. */
+const foldAll = (folded) => document.querySelectorAll("#log .msg:has(> .meta .fold)").forEach((div) => setFolded(div, folded));
+$("foldAll").addEventListener("click", () => foldAll(true));
+$("unfoldAll").addEventListener("click", () => foldAll(false));
+
+/** ↓ shows while the log is scrolled up from its latest entry. */
+function updateToBottom() {
+  const log = $("log");
+  $("toBottom").hidden = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+}
+$("log").addEventListener("scroll", updateToBottom, { passive: true });
+$("toBottom").addEventListener("click", () => $("log").scrollTo({ top: $("log").scrollHeight, behavior: "smooth" }));
 
 /** One collapsed row per tool call; the request and response stay one click away. */
 function addToolChip(call, response) {
@@ -2194,6 +2253,7 @@ function addToolChip(call, response) {
   det.append(sum, pre);
   $("log").appendChild(det);
   det.scrollIntoView({ block: "end", behavior: "smooth" });
+  updateToBottom();
   transcript.push({ kind: "tool", text: "```json\n" + json + "\n```", meta: `MCP ${name}` });
 }
 
@@ -2275,7 +2335,7 @@ $("chat").addEventListener("submit", (e) => {
   const t = $("prompt").value; $("prompt").value = ""; send(t);
 });
 $("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("chat").requestSubmit(); });
-$("clearBtn").addEventListener("click", () => { if (busy) busy.abort(); history = []; transcript.length = 0; $("log").replaceChildren(); setStatus(""); });
+$("clearBtn").addEventListener("click", () => { if (busy) busy.abort(); history = []; transcript.length = 0; $("log").replaceChildren(); setStatus(""); updateToBottom(); });
 $("saveLogBtn").addEventListener("click", () => {
   const md = [`# STPA analysis — ${currentModel?.system || "untitled"}`, "", `_Exported ${new Date().toISOString()} · ${providerLabel()}_`, "",
     "## Control structure", "", "```json", JSON.stringify(currentModel, null, 2), "```", "",
