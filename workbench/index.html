@@ -147,7 +147,9 @@
   .selchip button { border: 0; background: none; padding: 0 5px; font-size: 12px; line-height: 18px; color: var(--fg-muted); }
   #scopeLine { font-size: 12px; color: var(--fg-muted); padding: 6px 10px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   #scopeLine strong { color: var(--fg); font-weight: 600; }
-  #scopeLine label { display: inline-flex; gap: 4px; align-items: center; margin-left: auto; }
+  #scopeLine label { display: inline-flex; gap: 4px; align-items: center; }
+  #scopeLine .folds { display: inline-flex; gap: 6px; margin-left: auto; }
+  #scopeLine .folds button { padding: 2px 8px; font-size: 12px; }
   #modelPick { max-width: 210px; }
   .tables { border-top: 1px solid var(--border); max-height: 32vh; overflow: auto; }
   .tables details { border-bottom: 1px solid var(--border); }
@@ -348,6 +350,10 @@
     <div class="quick" id="quick"></div>
     <div id="scopeLine">
       <span id="scopeText"></span>
+      <span class="folds">
+        <button id="foldAll" type="button" title="Fold every answer to one line">Compress</button>
+        <button id="unfoldAll" type="button" title="Show every answer in full">Expand</button>
+      </span>
       <label title="Off: each question is sent with the control structure and the selection only. On: earlier questions and answers are sent too (more tokens)."><input type="checkbox" id="keep_history"> Send earlier turns</label>
     </div>
     <div id="logWrap">
@@ -2204,21 +2210,26 @@ function addFold(div, text) {
   btn.type = "button"; btn.className = "fold";
   const gist = document.createElement("div");
   gist.className = "gist";
-  gist.textContent = text.replace(/```[\s\S]*?```/g, " [code] ").replace(/[#*_`|>]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
-  const set = (folded) => {
-    div.classList.toggle("folded", folded);
-    btn.textContent = folded ? "▸" : "▾";
-    btn.title = folded ? "Show the answer" : "Hide the answer";
-    btn.setAttribute("aria-label", btn.title);
-    btn.setAttribute("aria-expanded", String(!folded));
-    updateToBottom();
-  };
-  btn.addEventListener("click", () => set(!div.classList.contains("folded")));
-  gist.addEventListener("click", () => set(false));
+  gist.textContent = text.replace(/```[\s\S]*?```/g, " [code] ").replace(/[#*_`|>]+|:?-{3,}:?/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+  btn.addEventListener("click", () => setFolded(div, !div.classList.contains("folded")));
+  gist.addEventListener("click", () => setFolded(div, false));
   div.querySelector(".meta").appendChild(btn);
   div.querySelector(".body").before(gist);
-  set(false);
+  setFolded(div, false);
 }
+function setFolded(div, folded) {
+  const btn = div.querySelector(".meta .fold");
+  div.classList.toggle("folded", folded);
+  btn.textContent = folded ? "▸" : "▾";
+  btn.title = folded ? "Show the answer" : "Hide the answer";
+  btn.setAttribute("aria-label", btn.title);
+  btn.setAttribute("aria-expanded", String(!folded));
+  updateToBottom();
+}
+/** Compress / Expand above the log fold or open every answer that has a caret. */
+const foldAll = (folded) => document.querySelectorAll("#log .msg:has(> .meta .fold)").forEach((div) => setFolded(div, folded));
+$("foldAll").addEventListener("click", () => foldAll(true));
+$("unfoldAll").addEventListener("click", () => foldAll(false));
 
 /** ↓ shows while the log is scrolled up from its latest entry. */
 function updateToBottom() {
