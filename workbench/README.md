@@ -21,7 +21,8 @@ The editor, diagram and safety-case tables work without a model. To use the anal
 
 - **Editor (left):** a JSON editor for the control structure. It loads presets (AEB, railway level crossing, insulin pump), validates live and draws a layered SVG diagram. Control actions point down; feedback points up as dashed lines. Lines are horizontal or vertical only: each controller pair gets a channel with the control line on the left and the feedback line beside it, and boxes widen so those channels run straight (as in the Penpot UC759 example). Labels move along their line to avoid boxes, other labels and other lines wherever there is room.
   - Validation catches duplicate ids, dangling `source`/`target` references, feedback that doesn't point to a controller, open control loops (a control action with no feedback path back), controllers without process-model variables, and dangling or malformed `ucas` entries (unknown `control_action`/hazard ids, invalid `type`).
-  - **Safety case (below the diagram):** collapsible tables for Losses, Hazards, Unsafe Control Actions and Safety constraints, generated from the same JSON. Click a row or an id chip to highlight everything it's linked to — losses ↔ hazards ↔ constraints, hazards ↔ UCAs — across all four tables and on the matching control-action line in the diagram.
+  - **Blocks, control actions and feedback (below the diagram):** editable tables for the structure. Click a block, control action or feedback in the diagram and its row opens with the cursor in its name or labels. You can type a new name, labels (one per line), process-model variables, assumptions, states, what an actuator acts on or a sensor measures, a link's source and target, and a feedback's latency. **+ Controller**, **+ Controlled process**, **+ Actuator**, **+ Sensor**, **+ Control action** and **+ Feedback** add rows. A new control action or feedback starts at the selected blocks if there are any. ✕ deletes a row; deleting a block also deletes its control actions and feedback. Each change is written to the JSON as one edit, so **Undo** (or Ctrl/⌘+Z in the JSON) reverts it. The tables also show a structure that has validation errors, so you can fix it there.
+  - **Safety case (below the structure tables):** collapsible tables for Losses, Hazards, Unsafe Control Actions and Safety constraints, generated from the same JSON. Click a row or an id chip to highlight everything it's linked to — losses ↔ hazards ↔ constraints, hazards ↔ UCAs — across all four tables and on the matching control-action line in the diagram.
 - **Analysis (right):** a chat with the selected model. Every request includes the STPA system prompt and the current structure. Quick actions:
   - Identify UCAs
   - Loss scenarios
@@ -31,10 +32,12 @@ The editor, diagram and safety-case tables work without a model. To use the anal
   - Safety constraints
 
   Any JSON structure the model proposes gets a **Load into editor** button, and a structure *patch* gets **Apply to editor**. You can export the conversation as Markdown.
+- **Layout:** each view (JSON, diagram, blocks/control actions/feedback, safety case) has **Compress**, which shrinks it to its bar (clicking the title does the same), and **Expand**, which lets it take the free height. The two panels share the width. Drag the divider between them (or focus it and use the arrow keys, Home and End), or use the ⇤ ⇥ buttons in the panel bars, which step through ¼, ⅓, ½, ⅔ and ¾. With the control structure at ⅔ or ¾, the analysis stays in view. The layout is saved in this browser. **Full page** in the diagram legend shows the diagram on the whole page, scaled to fit; **Close** or Esc returns.
 - **Selection and scope:** Shift+click process blocks (controllers, processes, actuators, sensors), control actions or feedback in the diagram to select them. Hover and selected follow the Penpot *Process Block* variants: Hovered has a 4/4 drop shadow, Selected has a 4 px halo. The bar under the diagram lists the selection. When something is selected, each question still sends the whole structure as context, but tells the model to focus on the selected elements and to return changes as a patch.
 - **Standalone questions:** each question is sent with the structure and its scope only, not the earlier chat. Tick **Send earlier turns** above the chat for follow-ups that need it.
 - **Model per question:** the picker beside **Send** lists the provider's models (Claude: Fable, Opus, Sonnet and Haiku with their versions). The next question uses the model you pick. Each answer shows the model, the time and the token counts.
-- **Actuators and sensors:** select control actions that end at a controlled process and press **Convert to actuator**. The tool inserts an actuator (controller → actuator → process). **Convert to sensor** does the same for feedback that starts at a process (process → sensor → controller). The control-action and feedback ids stay the same, so UCAs keep their links. Ctrl/⌘+Z in the editor undoes a conversion or an applied patch.
+- **Actuators and sensors:** select control actions that end at a controlled process and press **Convert to actuator**. The tool inserts an actuator (controller → actuator → process). **Convert to sensor** does the same for feedback that starts at a process (process → sensor → controller). The control-action and feedback ids stay the same, so UCAs keep their links.
+- **Switch to:** select process blocks and choose a type in **Switch to…** in the selection bar, or change the **Type** column in the blocks table. A block can become a controller, a controlled process, an actuator or a sensor. Its id, name and links stay. Fields that only the old type has (for example an actuator's `target` and `actuation`) are kept under `switched_from`, and they come back when you switch back. You can also ask the model, for example "add an actuator between c1 and p1" and later "make a1 a controlled process": it does the switch with a patch. **Undo** reverts a conversion, a switch or an applied patch.
 - **Settings drawer:** holds the API key, model and endpoint for each provider, plus Claude effort and refusal fallback, MCP options, an editable system prompt and key storage.
 
 ## Data model
@@ -51,8 +54,8 @@ The editor, diagram and safety-case tables work without a model. To use the anal
   "controllers":  [{ "id": "c1", "name": "…", "level": 0,
                      "process_model": { "variables": ["…"], "assumptions": ["…"] } }],
   "controlled_processes": [{ "id": "p1", "name": "…", "states": ["…"] }],
-  "control_actions": [{ "id": "ca1", "source": "c1", "target": "p1", "action": "…", "parameters": ["…"] }],
-  "feedback":        [{ "id": "fb1", "source": "p1", "target": "c1", "signal": "…", "latency_tolerance_ms": 20 }],
+  "control_actions": [{ "id": "ca1", "source": "c1", "target": "p1", "action": "…" | ["…", "…"], "parameters": ["…"] }],
+  "feedback":        [{ "id": "fb1", "source": "p1", "target": "c1", "signal": "…" | ["…", "…"], "latency_tolerance_ms": 20 }],
   "actuators": [{ "id": "a1", "name": "…", "target": "p1", "actuation": "…", "converted_from": "ca1" }],
   "sensors":   [{ "id": "s1", "name": "…", "source": "p1", "measures": "…",  "converted_from": "fb1" }]
 }
@@ -66,7 +69,13 @@ A control action can target an actuator, and feedback can come from a sensor. Th
 { "patch": true, "controlled_processes": [{ "id": "p1", "name": "Vehicle Braking System" }], "remove": ["ca2"] }
 ```
 
-An element whose id already exists is merged into that element. A new id is added, and ids listed in `remove` are deleted.
+Ids listed in `remove` are deleted first. Then an element whose id already exists is merged into that element, and a new id is added. To switch an element's type, a patch removes the id and adds the complete element with the same id to the new section:
+
+```json
+{ "patch": true, "remove": ["a1"], "controlled_processes": [{ "id": "a1", "name": "Hydraulic unit", "states": ["Idle", "Pressurised"] }] }
+```
+
+`action` (control action) and `signal` (feedback) hold one label or a list of labels. The diagram stacks the labels of a list along the line.
 
 `losses`, `hazards`, `constraints`, `ucas` and `level` are optional. A control action can target another controller, which is how you model hierarchical structures. When `level` is missing, the diagram ranks a controller from the control actions that point at it. Each `ucas` entry is one of STPA's four unsafe-control-action types for one control action, and `hazards` traces it back to the hazard(s) it can cause.
 
