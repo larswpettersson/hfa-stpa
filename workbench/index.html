@@ -116,6 +116,11 @@
   #diagramWrap { border-top: 1px solid var(--border); overflow: auto; min-height: 200px; max-height: 46vh; background: var(--bg); flex: 1 1 auto; }
   #vDiagram > .vbody { overflow: hidden; }
   #diagram { display: block; user-select: none; -webkit-user-select: none; }
+  /* Expanded view: the legend, diagram and selection bar cover the whole page; the SVG scales to fit (viewBox keeps the aspect). */
+  #diagramPane.full { position: fixed; inset: 0; z-index: 9; background: var(--bg-elev); display: flex; flex-direction: column; }
+  #diagramPane.full #diagramWrap { flex: 1; max-height: none; }
+  #diagramPane.full #diagram { width: 100%; height: 100%; }
+  #expandBtn { margin-left: auto; padding: 2px 8px; font-size: 12px; }
   #diagram .node rect { stroke-width: 1.5; }
   #diagram .ctrl rect { fill: var(--bg-elev); stroke: var(--brand); }
   #diagram .proc rect { fill: var(--bg-sunken); stroke: var(--fg-muted); }
@@ -265,11 +270,14 @@
       <section class="view" id="vDiagram" aria-label="Diagram">
         <div class="vbar"><button class="vtitle" type="button">Diagram</button></div>
         <div class="vbody">
-          <div class="legend">
-            <span><i id="swatchCa"></i>Control action</span><span><i class="fb" id="swatchFb"></i>Feedback</span><span id="counts"></span>
+          <div id="diagramPane">
+            <div class="legend">
+              <span><i id="swatchCa"></i>Control action</span><span><i class="fb" id="swatchFb"></i>Feedback</span><span id="counts"></span>
+              <button id="expandBtn" aria-pressed="false" title="Show the diagram on the whole page (Esc closes)">Full page</button>
+            </div>
+            <div id="diagramWrap"><svg id="diagram" role="img" aria-label="Control structure diagram"></svg></div>
+            <div id="selBar" aria-live="polite"></div>
           </div>
-          <div id="diagramWrap"><svg id="diagram" role="img" aria-label="Control structure diagram"></svg></div>
-          <div id="selBar" aria-live="polite"></div>
         </div>
       </section>
       <section class="view" id="vStructure" aria-label="Structure tables">
@@ -2265,7 +2273,17 @@ const drawer = $("drawer");
 const openDrawer = (open) => { drawer.classList.toggle("open", open); drawer.setAttribute("aria-hidden", String(!open)); if (open) drawer.querySelector("input,select")?.focus(); };
 $("settingsBtn").addEventListener("click", () => openDrawer(!drawer.classList.contains("open")));
 $("closeDrawer").addEventListener("click", () => openDrawer(false));
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") openDrawer(false); });
+const expandDiagram = (on) => {
+  $("diagramPane").classList.toggle("full", on);
+  $("expandBtn").textContent = on ? "Close" : "Full page";
+  $("expandBtn").setAttribute("aria-pressed", String(on));
+};
+$("expandBtn").addEventListener("click", () => expandDiagram(!$("diagramPane").classList.contains("full")));
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (drawer.classList.contains("open")) openDrawer(false);
+  else expandDiagram(false);
+});
 
 $("themeBtn").addEventListener("click", () => {
   const dark = document.documentElement.dataset.theme

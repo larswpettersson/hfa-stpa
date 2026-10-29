@@ -1,10 +1,21 @@
 # HFA STPA Workbench
 
+**🔗 Live: [larswpettersson.github.io/hfa-stpa/workbench/](https://larswpettersson.github.io/hfa-stpa/workbench/)**
+
 A single-file, zero-dependency tool for editing an STPA (System-Theoretic Process Analysis) control structure and analysing it with an LLM. You can use Anthropic Claude, Google Gemini or a local model (Ollama, LM Studio, LocalAI).
 
 ## Run
 
-Open `index.html` in a browser. It works from `file://` or any static server (for example `python3 -m http.server`). There is no build step and nothing to install.
+Use the [live version](https://larswpettersson.github.io/hfa-stpa/workbench/), or run it locally. There is no build step and nothing to install:
+
+- **Offline:** download [`index.html`](https://larswpettersson.github.io/hfa-stpa/workbench/index.html) (right-click → *Save link as…*) and open the saved file in a modern browser.
+- **From a clone:** open `workbench/index.html` directly (`file://`), or serve the folder with `python3 -m http.server` and open `http://localhost:8000/`.
+
+The editor, diagram and safety-case tables work without a model. To use the analysis chat:
+
+1. Open **Settings** and pick a provider: Claude, Gemini or Local (see [Providers](#providers)).
+2. Paste an API key for Claude or Gemini. For Local, check the endpoint and start the model server.
+3. Load a preset or paste your own structure into the editor, then press a quick action or type a question.
 
 ## What it does
 
@@ -21,12 +32,12 @@ Open `index.html` in a browser. It works from `file://` or any static server (fo
   - Safety constraints
 
   Any JSON structure the model proposes gets a **Load into editor** button, and a structure *patch* gets **Apply to editor**. You can export the conversation as Markdown.
-- **Layout:** each view (JSON, diagram, blocks/control actions/feedback, safety case) has **Compress**, which shrinks it to its bar (clicking the title does the same), and **Expand**, which lets it take the free height. The two panels share the width. Drag the divider between them (or focus it and use the arrow keys, Home and End), or use the ⇤ ⇥ buttons in the panel bars, which step through ¼, ⅓, ½, ⅔ and ¾. With the control structure at ⅔ or ¾, the analysis stays in view. The layout is saved in this browser.
+- **Layout:** each view (JSON, diagram, blocks/control actions/feedback, safety case) has **Compress**, which shrinks it to its bar (clicking the title does the same), and **Expand**, which lets it take the free height. The two panels share the width. Drag the divider between them (or focus it and use the arrow keys, Home and End), or use the ⇤ ⇥ buttons in the panel bars, which step through ¼, ⅓, ½, ⅔ and ¾. With the control structure at ⅔ or ¾, the analysis stays in view. The layout is saved in this browser. **Full page** in the diagram legend shows the diagram on the whole page, scaled to fit; **Close** or Esc returns.
 - **Selection and scope:** Shift+click process blocks (controllers, processes, actuators, sensors), control actions or feedback in the diagram to select them. Hover and selected follow the Penpot *Process Block* variants: Hovered has a 4/4 drop shadow, Selected has a 4 px halo. The bar under the diagram lists the selection. When something is selected, each question still sends the whole structure as context, but tells the model to focus on the selected elements and to return changes as a patch.
 - **Standalone questions:** each question is sent with the structure and its scope only, not the earlier chat. Tick **Send earlier turns** above the chat for follow-ups that need it.
 - **Model per question:** the picker beside **Send** lists the provider's models (Claude: Fable, Opus, Sonnet and Haiku with their versions). The next question uses the model you pick. Each answer shows the model, the time and the token counts.
-- **Actuators and sensors:** select control actions that end at a controlled process and press **Convert to actuator**. The tool inserts an actuator (controller → actuator → process). **Convert to sensor** does the same for feedback that starts at a process (process → sensor → controller). The control-action and feedback ids stay the same, so UCAs keep their links. - **Switch to:** select process blocks and choose a type in **Switch to…** in the selection bar, or change the **Type** column in the blocks table. A block can become a controller, a controlled process, an actuator or a sensor. Its id, name and links stay. Fields that only the old type has (for example an actuator's `target` and `actuation`) are kept under `switched_from`, and they come back when you switch back. You can also ask the model, for example "add an actuator between c1 and p1" and later "make a1 a controlled process": it does the switch with a patch. **Undo** reverts a conversion, a switch or an applied patch.
-- **Follow Penpot selection:** the diagram copies the style of whatever is selected in Penpot and keeps updating while the link is on (see [Penpot live style](#penpot-live-style)).
+- **Actuators and sensors:** select control actions that end at a controlled process and press **Convert to actuator**. The tool inserts an actuator (controller → actuator → process). **Convert to sensor** does the same for feedback that starts at a process (process → sensor → controller). The control-action and feedback ids stay the same, so UCAs keep their links.
+- **Switch to:** select process blocks and choose a type in **Switch to…** in the selection bar, or change the **Type** column in the blocks table. A block can become a controller, a controlled process, an actuator or a sensor. Its id, name and links stay. Fields that only the old type has (for example an actuator's `target` and `actuation`) are kept under `switched_from`, and they come back when you switch back. You can also ask the model, for example "add an actuator between c1 and p1" and later "make a1 a controlled process": it does the switch with a patch. **Undo** reverts a conversion, a switch or an applied patch.
 - **Settings drawer:** holds the API key, model and endpoint for each provider, plus Claude effort and refusal fallback, MCP options, an editable system prompt and key storage.
 
 ## Data model
@@ -91,35 +102,3 @@ Browsers can't start stdio MCP servers, so the page uses MCP's JSON-RPC 2.0 mess
    ```
 
    The model sees remote tools alongside the local ones, and calls to them are forwarded over the bridge. Comments in `index.html` (section 5) cover the transport and how to adapt it to Streamable HTTP.
-
-## Penpot live style
-
-**Follow Penpot selection** (under the diagram) makes the diagram copy the style of the object selected in Penpot. While the link is on, the page checks the selection every few seconds, so selecting a different board or component restyles the diagram.
-
-How it works:
-1. The page calls the Penpot MCP server's `execute_code` tool, using MCP's Streamable HTTP transport.
-2. The code it runs reads `penpot.selection` and searches the selected shapes for the STPA components by layer or component name.
-3. Each match's fill, stroke, dash style, corner radius, size and font is applied to the matching part of the diagram:
-
-| Penpot component | Applied to |
-|---|---|
-| Controller | Controller boxes |
-| Controlled Process | Controlled-process boxes |
-| Connector Control | Control-action arrows |
-| Connector Feedback | Feedback arrows |
-| Group Identity Frame | A system boundary around the whole diagram, labelled with `system` |
-
-If the selection contains none of these components, its own style is used for every box. **Reset style** goes back to the theme colours. The last style is saved in this browser, so the diagram looks the same after a reload.
-
-### Setup
-
-The hosted Penpot MCP doesn't allow requests from a web page (no CORS headers), and its URL contains your user token. Run the included relay, which has no dependencies:
-
-```bash
-cd workbench
-PENPOT_MCP_URL=<your Penpot MCP user token> node penpot-relay.mjs   # listens on http://127.0.0.1:4410/mcp
-```
-
-`PENPOT_MCP_URL` is the same value that `hfa-ds/.mcp.json` uses. You can also give it a full MCP URL, for example a local Penpot MCP server. Leave **Settings → Penpot MCP URL** at its default (`http://127.0.0.1:4410/mcp`).
-
-In Penpot, open the STPA file and make sure its MCP connection is active. Select the **Control Model — Draft** board, or any of the components, then press **Follow Penpot selection**.
