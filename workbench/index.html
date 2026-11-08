@@ -362,7 +362,7 @@
     </div>
     <div class="status" id="status"></div>
     <form id="chat">
-      <textarea id="prompt" placeholder="Ask about the control structure… (Ctrl/⌘+Enter to send)" aria-label="Message"></textarea>
+      <textarea id="prompt" placeholder="Ask about the control structure… (Enter sends, Shift+Enter for a new line)" aria-label="Message"></textarea>
       <select id="modelPick" aria-label="Model for the next question" title="Model for the next question"></select>
       <button type="submit" class="primary" id="sendBtn">Send</button>
     </form>
@@ -2334,7 +2334,13 @@ $("chat").addEventListener("submit", (e) => {
   if (busy) { busy.abort(); return; }
   const t = $("prompt").value; $("prompt").value = ""; send(t);
 });
-$("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("chat").requestSubmit(); });
+// Enter sends, Shift+Enter gives a new line (design principle 4.6). Nothing is sent from an empty field,
+// while a reply is running (only Stop ends it) or while an input method (IME) is composing.
+$("prompt").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.keyCode === 229) return;
+  e.preventDefault();
+  if (!busy && $("prompt").value.trim()) $("chat").requestSubmit();
+});
 $("clearBtn").addEventListener("click", () => { if (busy) busy.abort(); history = []; transcript.length = 0; $("log").replaceChildren(); setStatus(""); updateToBottom(); });
 $("saveLogBtn").addEventListener("click", () => {
   const md = [`# STPA analysis — ${currentModel?.system || "untitled"}`, "", `_Exported ${new Date().toISOString()} · ${providerLabel()}_`, "",
