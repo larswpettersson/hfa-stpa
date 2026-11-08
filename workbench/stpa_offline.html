@@ -1,0 +1,2490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HFA STPA Workbench</title>
+<!--
+  HFA STPA Workbench — STPA control-structure editor + LLM analyst (the analyst is the shared HFA AI panel, ai-assist.js, next to this file).
+
+  Open this file directly (file://) or serve it from any static server. No build step, no frameworks.
+  stpa_offline.html is the same tool with ai-assist.js inlined (npm run build:offline in hfa-ds), for use as one file.
+  Colours come from the HFA DS tokens (tokens.json → mode/light, mode/dark), copied in as CSS variables.
+
+  Sections in the <script> below:
+    1. Storage helpers (localStorage, guarded)
+    2. Presets + STPA data model validation
+    3. Control-structure diagram (SVG)
+    4. The AI panel: STPA's configuration of the shared panel (ai-assist.js, one file for every HFA tool)
+-->
+<style>
+  :root {
+    --bg: #F0F6FC; --bg-elev: #FFFFFF; --bg-sunken: #E6EDF3;
+    --fg: #0D1117; --fg-muted: #57606A; --fg-subtle: #8B949E;
+    --brand: #D70000; --brand-subtle: #FFE5E5; --on-brand: #FFFFFF;
+    --info: #007FFF; --success: #228B22; --warning: #B38600; --error: #C70039;
+    --bg-error: #FBE3E8; --bg-warning: #FFF6D6; --bg-success: #E3F3E8;
+    --border: #D0D7DE; --radius: 6px;
+    /* Process Block states from the Penpot library: Hovered = 4/4 drop shadow, Selected = spread-4 halo */
+    --shadow-hover: rgba(0,0,0,.2); --shadow-sel: rgba(0,0,0,.2);
+    --font: "Source Sans 3", "Source Sans Pro", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    /* The shared AI panel (ai-assist.js) reads the HFA DS token names; this tool's variables carry the same values. */
+    --color-background-base: var(--bg); --color-background-elevated: var(--bg-elev); --color-background-sunken: var(--bg-sunken);
+    --color-foreground: var(--fg); --color-foreground-muted: var(--fg-muted); --color-foreground-subtle: var(--fg-subtle);
+    --color-brand-primary: var(--brand); --color-background-warning: var(--bg-warning);
+    --font-sans: var(--font); --font-mono: var(--mono);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #2D333B; --bg-elev: #383D45; --bg-sunken: #22272E;
+      --fg: #FAFBFC; --fg-muted: #C9D1D9; --fg-subtle: #9CA3AF;
+      --brand: #FF4444; --brand-subtle: #3D1515; --on-brand: #FFFFFF;
+      --info: #58A6FF; --success: #3FB950; --warning: #FFC300; --error: #E03E3E;
+      --bg-error: #602A36; --bg-warning: #6B5414; --bg-success: #1A5A42;
+      --border: #4A515B; color-scheme: dark;
+      --shadow-hover: rgba(0,0,0,.55); --shadow-sel: rgba(250,251,252,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #2D333B; --bg-elev: #383D45; --bg-sunken: #22272E;
+    --fg: #FAFBFC; --fg-muted: #C9D1D9; --fg-subtle: #9CA3AF;
+    --brand: #FF4444; --brand-subtle: #3D1515; --on-brand: #FFFFFF;
+    --info: #58A6FF; --success: #3FB950; --warning: #FFC300; --error: #E03E3E;
+    --bg-error: #602A36; --bg-warning: #6B5414; --bg-success: #1A5A42;
+    --border: #4A515B; color-scheme: dark;
+    --shadow-hover: rgba(0,0,0,.55); --shadow-sel: rgba(250,251,252,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font); display: flex; flex-direction: column; }
+  button, select, input, textarea { font: inherit; color: inherit; }
+  button {
+    background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 5px 10px; cursor: pointer; white-space: nowrap;
+  }
+  button:hover { border-color: var(--fg-subtle); }
+  button.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+  button:disabled { opacity: .5; cursor: default; }
+  select, input[type=text], input[type=password], input[type=url], input[type=number] {
+    background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 5px 8px; min-width: 0;
+  }
+  :focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
+
+  header {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 16px; background: var(--bg-elev); border-bottom: 1px solid var(--border);
+  }
+  /* Same button colour as in the AI panel header, so the panel toggle looks the same wherever it sits (design principle 4.7). */
+  header button:not(.primary) { background: var(--bg); }
+  header h1 { font-size: 16px; margin: 0 auto 0 0; display: flex; align-items: center; gap: 8px; }
+  header h1 .mark { width: 10px; height: 10px; border-radius: 2px; background: var(--brand); }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); padding: 12px 16px; min-height: 0; }
+  .panel { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .panel > .pbody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+  /* Views: each has a bar with its title (click to compress) and an Expand button. A compressed view keeps its
+     body rendered at zero height, so the JSON editor can still take focus for undoable edits. */
+  .view { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 120px; border-top: 1px solid var(--border); }
+  .view:first-child { border-top: 0; }
+  .view > .vbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; background: var(--bg-elev); }
+  .view > .vbar .vtitle { margin-right: auto; border: 0; background: none; padding: 2px 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-muted); }
+  .view > .vbar .vtitle::before { content: "▾ "; font-weight: 400; }
+  .view > .vbar button:not(.vtitle) { padding: 1px 8px; font-size: 12px; }
+  .view > .vbody { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+  .view.compressed { flex: none; min-height: 0; }
+  .view.compressed > .vbody { flex: none; height: 0; overflow: hidden; }
+  .view.compressed > .vbar .vtitle::before { content: "▸ "; }
+  .view.expanded { flex: 1 0 auto; }
+  .view.expanded > .vbody, .view.expanded #diagramWrap { max-height: none !important; }
+  .vbar button[aria-pressed="true"] { background: var(--bg-sunken); border-color: var(--fg-subtle); }
+  #vJson:not(.compressed):not(.expanded) { flex: 1 1 200px; }
+  .panel > .bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 8px; border-bottom: 1px solid var(--border); }
+  .panel > .bar h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-muted); margin: 0 auto 0 0; }
+
+  #editor {
+    flex: 1 1 200px; min-height: 160px; resize: vertical; border: 0; padding: 10px; background: var(--bg-sunken);
+    font: 12.5px/1.5 var(--mono); tab-size: 2; white-space: pre; overflow: auto;
+  }
+  #issues { flex: none; max-height: 140px; overflow: auto; border-top: 1px solid var(--border); font-size: 13px; }
+  #issues div { padding: 3px 10px; border-bottom: 1px solid var(--border); }
+  #issues .err { background: var(--bg-error); }
+  #issues .warn { background: var(--bg-warning); }
+  #issues .ok { background: var(--bg-success); }
+  #diagramWrap { border-top: 1px solid var(--border); overflow: auto; min-height: 200px; max-height: 46vh; background: var(--bg); flex: 1 1 auto; }
+  #vDiagram > .vbody { overflow: hidden; }
+  #diagram { display: block; user-select: none; -webkit-user-select: none; }
+  /* Expanded view: the legend, diagram and selection bar cover the whole page; the SVG scales to fit (viewBox keeps the aspect). */
+  #diagramPane.full { position: fixed; inset: 0; z-index: 9; background: var(--bg-elev); display: flex; flex-direction: column; }
+  #diagramPane.full #diagramWrap { flex: 1; max-height: none; }
+  #diagramPane.full #diagram { width: 100%; height: 100%; }
+  #expandBtn { margin-left: auto; padding: 2px 8px; font-size: 12px; }
+  #diagram .node rect { stroke-width: 1.5; }
+  #diagram .ctrl rect { fill: var(--bg-elev); stroke: var(--brand); }
+  #diagram .proc rect { fill: var(--bg-sunken); stroke: var(--fg-muted); }
+  #diagram .act rect, #diagram .sens rect { fill: var(--bg-elev); stroke: var(--fg); stroke-width: 1; }
+  #diagram .node[data-sel]:hover rect, #diagram path[data-sel]:hover, #diagram text[data-sel]:hover,
+  #diagram .node.editing rect, #diagram path.editing, #diagram text.editing { filter: drop-shadow(4px 4px 4px var(--shadow-hover)); }
+  #diagram .node.sel rect, #diagram path.sel, #diagram text.sel { filter: url(#sel-halo); }
+  #diagram .node.sel[data-sel]:hover rect, #diagram path.sel:hover, #diagram text.sel:hover { filter: url(#sel-halo) drop-shadow(4px 4px 4px var(--shadow-hover)); }
+  #diagram text { fill: var(--fg); font: 12px var(--font); }
+  #diagram .sub { fill: var(--fg-muted); font-size: 10.5px; }
+  #diagram .ca { stroke: var(--brand); fill: none; stroke-width: 1.5; }
+  #diagram .fb { stroke: var(--info); fill: none; stroke-width: 1.5; stroke-dasharray: 5 3; }
+  #diagram .lbl-ca, #diagram .lbl-fb { font-size: 11px; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round; }
+  #diagram .lbl-ca { fill: var(--brand); }
+  #diagram .lbl-fb { fill: var(--info); }
+  .legend { display: flex; gap: 14px; row-gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--fg-muted); padding: 6px 10px; }
+  .legend i { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--brand); vertical-align: middle; margin-right: 4px; }
+  .legend i.fb { border-top: 2px dashed var(--info); }
+
+  #diagram [data-id], #diagram [data-ids], #diagram [data-sel] { cursor: pointer; }
+  #selBar { display: flex; gap: 6px; row-gap: 4px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--fg-muted); padding: 4px 10px 6px; border-top: 1px solid var(--border); }
+  #selBar button { padding: 2px 8px; font-size: 12px; }
+  .selchip { display: inline-flex; align-items: center; gap: 2px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px; padding: 0 2px 0 8px; color: var(--fg); }
+  .selchip button { border: 0; background: none; padding: 0 5px; font-size: 12px; line-height: 18px; color: var(--fg-muted); }
+  .tables { border-top: 1px solid var(--border); max-height: 32vh; overflow: auto; }
+  .tables details { border-bottom: 1px solid var(--border); }
+  .tables summary { cursor: pointer; padding: 7px 10px; font-size: 13px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 6px; }
+  .tables summary::-webkit-details-marker { display: none; }
+  .tables summary::before { content: "▸"; display: inline-block; transition: transform .15s; font-weight: 400; color: var(--fg-muted); }
+  .tables details[open] summary::before { transform: rotate(90deg); }
+  .tables summary .n { font-weight: 400; color: var(--fg-muted); font-size: 12px; }
+  .tables .tblwrap { padding: 0 10px 10px; overflow: auto; }
+  .tables table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .tables th, .tables td { border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: left; vertical-align: top; }
+  .tables th { color: var(--fg-muted); font-weight: 600; }
+  .tables tbody tr { cursor: pointer; }
+  .tables tbody tr:hover { background: var(--bg-sunken); }
+  .tables tr.hl { background: var(--brand-subtle); }
+  .tables tr.dim { opacity: .4; }
+  .tables .chip { display: inline-block; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px;
+    padding: 0 7px; margin: 1px 3px 1px 0; font-size: 11px; cursor: pointer; }
+  .tables .chip:hover { border-color: var(--fg-subtle); }
+  .tables .chip.hl { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+
+  /* Structure tables: every cell is a field; a change is written to the JSON as one undoable edit. */
+  #structureWrap td { vertical-align: top; }
+  #structureWrap tbody tr { cursor: default; }
+  #structureWrap tr.cur { background: var(--brand-subtle); }
+  #structureWrap input, #structureWrap select, #structureWrap textarea { width: 100%; min-width: 70px; padding: 3px 6px; font-size: 12.5px;
+    background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); }
+  #structureWrap textarea { resize: vertical; min-height: 28px; line-height: 1.35; display: block; }
+  #structureWrap .fld { display: grid; gap: 1px; margin-bottom: 4px; font-size: 11px; color: var(--fg-muted); }
+  #structureWrap .fld:last-child { margin-bottom: 0; }
+  #structureWrap td.idc { font-family: var(--mono); font-size: 12px; padding-top: 7px; white-space: nowrap; }
+  #structureWrap button.del { border: 0; background: none; padding: 3px 6px; color: var(--fg-muted); }
+  #structureWrap .adds { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 6px; }
+  #structureWrap .adds button { padding: 2px 8px; font-size: 12px; }
+  #structureWrap .note { padding: 6px 10px; font-size: 12px; color: var(--fg-muted); }
+  .status { font-size: 12px; color: var(--fg-muted); padding: 0 10px 6px; min-height: 18px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="mark"></span>HFA STPA Workbench</h1>
+  <div class="row">
+    <button id="themeBtn" title="Toggle light/dark theme">Theme</button>
+  </div>
+</header>
+
+<main>
+  <!-- ───────────── Left: STPA editor ───────────── -->
+  <section class="panel" id="leftPanel" aria-label="STPA control structure editor">
+    <div class="bar">
+      <h2>Control structure</h2>
+      <select id="preset" aria-label="Load preset"><option value="">Load preset…</option></select>
+      <button id="formatBtn" title="Pretty-print JSON">Format</button>
+      <button id="importBtn" title="Open a .json file">Open…</button>
+      <button id="exportBtn" title="Save the structure as a JSON file">Save</button>
+      <button id="undoBtn" title="Undo the last change to the structure (also from the tables and conversions)">Undo</button>
+      <input type="file" id="fileInput" accept=".json,application/json" hidden>
+    </div>
+    <div class="pbody">
+      <section class="view" id="vJson" aria-label="JSON">
+        <div class="vbar"><button class="vtitle" type="button">JSON</button></div>
+        <div class="vbody"><textarea id="editor" spellcheck="false" aria-label="STPA JSON"></textarea></div>
+      </section>
+      <div id="issues" aria-live="polite"></div>
+      <section class="view" id="vDiagram" aria-label="Diagram">
+        <div class="vbar"><button class="vtitle" type="button">Diagram</button></div>
+        <div class="vbody">
+          <div id="diagramPane">
+            <div class="legend">
+              <span><i id="swatchCa"></i>Control action</span><span><i class="fb" id="swatchFb"></i>Feedback</span><span id="counts"></span>
+              <button id="expandBtn" aria-pressed="false" title="Show the diagram on the whole page (Esc closes)">Full page</button>
+            </div>
+            <div id="diagramWrap"><svg id="diagram" role="img" aria-label="Control structure diagram"></svg></div>
+            <div id="selBar" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
+      <section class="view" id="vStructure" aria-label="Structure tables">
+        <div class="vbar"><button class="vtitle" type="button">Blocks, control actions and feedback</button></div>
+        <div class="vbody tables" id="structureWrap">
+          <details id="stBlocks" open>
+            <summary>Process blocks <span class="n" id="stBlocksCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>Type</th><th>Name</th><th>Details</th><th></th></tr></thead><tbody id="stBlocksBody"></tbody></table>
+              <div class="adds" id="stBlocksAdd"></div></div>
+          </details>
+          <details id="stCas" open>
+            <summary>Control actions <span class="n" id="stCasCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>From</th><th>To</th><th>Labels (one per line)</th><th></th></tr></thead><tbody id="stCasBody"></tbody></table>
+              <div class="adds" id="stCasAdd"></div></div>
+          </details>
+          <details id="stFbs" open>
+            <summary>Feedback <span class="n" id="stFbsCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>From</th><th>To</th><th>Labels (one per line)</th><th>Latency ms</th><th></th></tr></thead><tbody id="stFbsBody"></tbody></table>
+              <div class="adds" id="stFbsAdd"></div></div>
+          </details>
+        </div>
+      </section>
+      <section class="view" id="vSafety" aria-label="Safety case">
+        <div class="vbar"><button class="vtitle" type="button">Safety case</button></div>
+        <div class="vbody tables" id="safetyCaseWrap">
+          <details id="scLosses" open>
+            <summary>Losses <span class="n" id="scLossesCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>Description</th></tr></thead><tbody id="scLossesBody"></tbody></table></div>
+          </details>
+          <details id="scHazards" open>
+            <summary>Hazards <span class="n" id="scHazardsCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>Description</th><th>Losses</th></tr></thead><tbody id="scHazardsBody"></tbody></table></div>
+          </details>
+          <details id="scUcas">
+            <summary>Unsafe Control Actions <span class="n" id="scUcasCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>Type</th><th>Control action</th><th>Context</th><th>Hazards</th></tr></thead><tbody id="scUcasBody"></tbody></table></div>
+          </details>
+          <details id="scConstraints" open>
+            <summary>Safety constraints <span class="n" id="scConstraintsCount">0</span></summary>
+            <div class="tblwrap"><table><thead><tr><th>ID</th><th>Description</th><th>Hazards</th></tr></thead><tbody id="scConstraintsBody"></tbody></table></div>
+          </details>
+        </div>
+      </section>
+    </div>
+  </section>
+
+</main>
+
+<div class="status" id="status" role="status" aria-live="polite"></div>
+
+<script>
+/*
+  HFA AI assistant — a side panel that sends the tool's current analysis to an LLM and can apply its proposals.
+
+  One panel for every HFA tool: provider adapters (Anthropic Claude, Google Gemini, Hugging Face Inference Providers,
+  local Ollama / LM Studio / LocalAI), the model picker, streaming, Markdown rendering, foldable answers, Markdown export,
+  the icon toggle (design principle 4.7) and the state without a provider.
+
+  THIS FILE IS A COPY. The source is hfa-ds/scripts/ai-panel/ai-assist.js. Change it there and run
+  `npm run sync:ai-panel` in hfa-ds to copy it into hfa-hta, hfa-bowtie and hfa-stpa (see arkitektur.md, "AI-panelen").
+  What differs between the tools is configured when the tool mounts the panel, as below, never by editing a copy.
+
+  The host tool mounts it with an adapter:
+
+    HFAAssist.mount({
+      id: "hta",                       // localStorage prefix for the per-tool settings (system prompt, panel width)
+      title: "HTA analysis",
+      subject: "the analysis",         // "Ask about …" in the question field
+      toolbar: element,                // the "AI" toggle button is appended here
+      buttonClass: "action-btn",
+      systemPrompt: "…",               // editable default system prompt
+      schemaPrompt: "…" | () => "…",   // appended after the (editable) system prompt: data model + patch format;
+                                       // a function is called for every question (e.g. built from the analysis)
+      contextLabel: "Current HTA (JSON)",
+      getContext: () => object,        // the analysis sent with every question
+      getScope: () => null | { label, items },   // the selection; items is sent as JSON with the question
+      quickActions: [[label, prompt], …],
+      inspect: (obj) => null | { title, applyLabel },   // is a ```json block in an answer something we can apply?
+      apply: (obj) => string,          // apply it; returns a status message, throws on error
+      snapshot: () => any, restore: (snap) => void,     // "Revert" after an applied proposal
+      welcome: "Markdown",
+      exportName: "hta-analysis",
+    });
+
+  Provider settings (keys, models, endpoint) are shared by the HFA tools under "hfa-ai:providers", because the tools are
+  served from one origin. On first use the keys saved by the STPA workbench ("hfa-stpa:settings") are picked up.
+*/
+(function () {
+  "use strict";
+
+  /* ── Storage (guarded: private windows can throw) ─────────────────────── */
+  const store = {
+    get(k, fallback = null) { try { const v = localStorage.getItem(k); return v === null ? fallback : JSON.parse(v); } catch { return fallback; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
+  };
+  const PROVIDER_KEY = "hfa-ai:providers";
+  const clamp = (v, lo, hi, d) => (v === null || v === undefined || v === "" || !Number.isFinite(+v)) ? d : Math.min(hi, Math.max(lo, +v));
+  const el = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); n.append(...kids); return n; };
+
+  function download(filename, text, type) {
+    const url = URL.createObjectURL(new Blob([text], { type }));
+    const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     Provider adapters (same as the STPA workbench)
+     callLLM() takes a provider-neutral conversation and returns { text, raw, usage }.
+     ═══════════════════════════════════════════════════════════════════════ */
+  const DEFAULTS = {
+    claude_model: "claude-opus-5-5",
+    gemini_model: "gemini-2.5-pro",
+    local_endpoint: "http://localhost:11434/v1/chat/completions",
+    local_model: "llama3.1",
+    claude_max_tokens: 64000,
+    hf_model: "google/gemma-4-31B-it",
+  };
+  /* Hugging Face Inference Providers: one OpenAI-compatible router in front of the providers that serve open models.
+     A model id may end in ":<provider>", ":cheapest" or ":fastest" to choose who serves it. */
+  const HF_ROUTER = "https://router.huggingface.co/v1";
+  const HF_MODELS = ["google/gemma-4-31B-it", "google/gemma-3-27b-it", "Qwen/Qwen3-32B", "meta-llama/Llama-3.3-70B-Instruct"];
+
+  /* maxOut caps max_tokens; effort lists the accepted levels (null: don't send output_config); fallback marks the
+     models that take server-side refusal fallback (fallbacks: "default"). */
+  const EFFORT_ALL = ["low", "medium", "high", "xhigh", "max"], EFFORT_46 = ["low", "medium", "high", "max"];
+  const CLAUDE_MODELS = [
+    { id: "claude-fable-5-1", family: "Fable", label: "Fable 5.1", maxOut: 128000, effort: EFFORT_ALL, fallback: true },
+    { id: "claude-fable-5", family: "Fable", label: "Fable 5", maxOut: 128000, effort: EFFORT_ALL },
+    { id: "claude-opus-5-5", family: "Opus", label: "Opus 5.5", maxOut: 128000, effort: EFFORT_ALL, fallback: true },
+    { id: "claude-opus-5", family: "Opus", label: "Opus 5", maxOut: 128000, effort: EFFORT_ALL, fallback: true },
+    { id: "claude-opus-4-8", family: "Opus", label: "Opus 4.8", maxOut: 128000, effort: EFFORT_ALL },
+    { id: "claude-opus-4-7", family: "Opus", label: "Opus 4.7", maxOut: 128000, effort: EFFORT_ALL },
+    { id: "claude-opus-4-6", family: "Opus", label: "Opus 4.6", maxOut: 128000, effort: EFFORT_46 },
+    { id: "claude-sonnet-5-5", family: "Sonnet", label: "Sonnet 5.5", maxOut: 128000, effort: EFFORT_ALL, fallback: true },
+    { id: "claude-sonnet-5", family: "Sonnet", label: "Sonnet 5", maxOut: 128000, effort: EFFORT_ALL },
+    { id: "claude-sonnet-4-6", family: "Sonnet", label: "Sonnet 4.6", maxOut: 128000, effort: EFFORT_46 },
+    { id: "claude-haiku-5-5", family: "Haiku", label: "Haiku 5.5", maxOut: 128000, effort: EFFORT_ALL },
+    { id: "claude-haiku-4-5", family: "Haiku", label: "Haiku 4.5", maxOut: 64000, effort: null },
+  ];
+  const GEMINI_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+  const CLAUDE_HEADERS = (key) => ({ "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" });
+
+  let settings = {};
+
+  /** Read an Anthropic SSE stream into { content, stop_reason, stop_details, usage }. onText(chars) reports progress. */
+  async function readClaudeStream(res, onText) {
+    if (!res.ok) return readJson(res); // throws with the API's error message
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    const blocks = [], at = new Map(), usage = {};
+    let buf = "", chars = 0, stop_reason = null, stop_details = null;
+    const handle = (ev) => {
+      if (ev.type === "message_start") Object.assign(usage, ev.message?.usage);
+      else if (ev.type === "content_block_start") at.set(ev.index, blocks.push({ ...ev.content_block, text: ev.content_block?.text || "" }) - 1);
+      else if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta") {
+        const b = blocks[at.get(ev.index)]; if (b) b.text += ev.delta.text;
+        chars += ev.delta.text.length; onText?.(chars);
+      } else if (ev.type === "message_delta") {
+        stop_reason = ev.delta?.stop_reason ?? stop_reason;
+        stop_details = ev.delta?.stop_details ?? stop_details;
+        Object.assign(usage, ev.usage);
+      } else if (ev.type === "error") throw new Error(ev.error?.message || "stream error");
+    };
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const data = buf.slice(0, i).split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
+        buf = buf.slice(i + 2);
+        if (!data) continue;
+        let ev; try { ev = JSON.parse(data); } catch { continue; }
+        handle(ev);
+      }
+    }
+    return { content: blocks, stop_reason, stop_details, usage };
+  }
+
+  async function readJson(res) {
+    const raw = await res.text();
+    let data; try { data = JSON.parse(raw); } catch { data = null; }
+    if (!res.ok) {
+      const msg = data?.error?.message || data?.error || raw.slice(0, 500) || res.statusText;
+      throw new Error(`HTTP ${res.status}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
+    }
+    if (data === null) throw new Error("Response was not JSON: " + raw.slice(0, 300));
+    return data;
+  }
+
+  /** A bare OpenAI-compatible base URL (…/v1) gets /chat/completions appended; full chat endpoints and Ollama's
+      native /api/chat and /api/generate are used as given. */
+  function localChatUrl(endpoint) {
+    const u = new URL(endpoint);
+    if (!/\/(chat\/completions|completions|api\/chat|api\/generate)\/?$/.test(u.pathname))
+      u.pathname = u.pathname.replace(/\/$/, "") + "/chat/completions";
+    return u.href;
+  }
+
+  /** …/chat/completions → …/models (OpenAI-compatible), …/api/chat or …/api/generate → …/api/tags (Ollama native). */
+  function localModelsUrl(endpoint) {
+    const u = new URL(endpoint);
+    if (/\/api\/(chat|generate)\/?$/.test(u.pathname)) u.pathname = u.pathname.replace(/\/api\/(chat|generate)\/?$/, "/api/tags");
+    else u.pathname = u.pathname.replace(/\/chat\/completions\/?$|\/completions\/?$/, "").replace(/\/$/, "") + "/models";
+    return u.href;
+  }
+
+  /** Ask the provider which models it serves. Returns [{ id, label }]. */
+  async function listModels(provider) {
+    const cfg = settings;
+    if (provider === "claude") {
+      if (!cfg.claude_key) throw new Error("no API key");
+      const out = [];
+      for (let after = null; ;) {
+        const q = new URLSearchParams({ limit: "1000" }); if (after) q.set("after_id", after);
+        const data = await readJson(await fetch("https://api.anthropic.com/v1/models?" + q, { headers: CLAUDE_HEADERS(cfg.claude_key) }));
+        (data.data || []).forEach((m) => out.push({ id: m.id, label: m.display_name || m.id }));
+        if (!data.has_more || !data.last_id) return out;
+        after = data.last_id;
+      }
+    }
+    if (provider === "gemini") {
+      if (!cfg.gemini_key) throw new Error("no API key");
+      const out = [];
+      for (let page = ""; ;) {
+        const q = new URLSearchParams({ pageSize: "1000" }); if (page) q.set("pageToken", page);
+        const data = await readJson(await fetch("https://generativelanguage.googleapis.com/v1beta/models?" + q, { headers: { "x-goog-api-key": cfg.gemini_key } }));
+        (data.models || []).filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+          .forEach((m) => { const id = m.name.replace(/^models\//, ""); out.push({ id, label: m.displayName || id }); });
+        if (!data.nextPageToken) return out;
+        page = data.nextPageToken;
+      }
+    }
+    if (provider === "hf") {
+      if (!cfg.hf_key) throw new Error("no access token");
+      const data = await readJson(await fetch(HF_ROUTER + "/models", { headers: { authorization: "Bearer " + cfg.hf_key } }));
+      return (data.data || []).map((m) => ({ id: m.id, label: m.id })).sort((a, b) => a.id.localeCompare(b.id));
+    }
+    if (provider === "local") {
+      const headers = {}; if (cfg.local_key) headers.authorization = "Bearer " + cfg.local_key;
+      const data = await readJson(await fetch(localModelsUrl(cfg.local_endpoint || DEFAULTS.local_endpoint), { headers }));
+      const list = data.data || data.models || [];
+      return list.map((m) => { const id = m.id || m.name || m.model; return { id, label: id }; }).filter((m) => m.id)
+        .sort((a, b) => a.id.localeCompare(b.id));
+    }
+    throw new Error("Unknown provider: " + provider);
+  }
+
+  async function callLLM({ provider, systemPrompt, messages, signal, onProgress }) {
+    const cfg = settings;
+
+    if (provider === "claude") {
+      if (!cfg.claude_key) throw new Error("Add an Anthropic API key in Settings.");
+      const headers = { "content-type": "application/json", ...CLAUDE_HEADERS(cfg.claude_key) };
+      const model = cfg.claude_model || DEFAULTS.claude_model;
+      const info = CLAUDE_MODELS.find((x) => x.id === model); // unknown (custom) ids get the request as configured
+      const want = clamp(cfg.claude_max_tokens, 1024, 128000, DEFAULTS.claude_max_tokens);
+      const body = {
+        model,
+        max_tokens: Math.min(want, info?.maxOut ?? want),
+        stream: true, // long answers (a whole revised analysis) outlast a non-streaming request
+        cache_control: { type: "ephemeral" }, // the system prompt + analysis repeat on every question
+        system: systemPrompt,
+        messages,
+      };
+      if (!info || info.effort) {
+        const effort = cfg.claude_effort || "medium";
+        body.output_config = { effort: !info || info.effort.includes(effort) ? effort : "high" };
+      }
+      if (cfg.claude_fallbacks && (!info || info.fallback)) { // re-run declined requests on a fallback model, server-side
+        headers["anthropic-beta"] = "server-side-fallback-2026-07-01";
+        body.fallbacks = "default";
+      }
+      const data = await readClaudeStream(await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body), signal }), onProgress);
+      // Thinking blocks may precede the answer, so join every text block instead of reading content[0].
+      const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n\n");
+      if (data.stop_reason === "refusal") {
+        const why = data.stop_details?.explanation || data.stop_details?.category || "no details";
+        return { text: (text ? text + "\n\n" : "") + `_The model declined this request (${why})._`, raw: data };
+      }
+      if (data.stop_reason === "max_tokens")
+        return { text: text + `\n\n_…output truncated at ${body.max_tokens} tokens. Narrow the scope (select the elements to focus on), ask for a patch, or raise Max output tokens in Settings._`, raw: data, usage: data.usage };
+      return { text: text || JSON.stringify(data), raw: data, usage: data.usage };
+    }
+
+    if (provider === "gemini") {
+      if (!cfg.gemini_key) throw new Error("Add a Gemini API key in Settings.");
+      const model = encodeURIComponent(cfg.gemini_model || DEFAULTS.gemini_model);
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+      const body = {
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
+      };
+      const data = await readJson(await fetch(url, {
+        method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": cfg.gemini_key }, body: JSON.stringify(body), signal,
+      }));
+      const cand = data.candidates?.[0];
+      const text = (cand?.content?.parts || []).map((p) => p.text || "").join("");
+      if (!text && (data.promptFeedback?.blockReason || cand?.finishReason)) return { text: `_No answer (${data.promptFeedback?.blockReason || cand.finishReason})._`, raw: data };
+      return { text: text || JSON.stringify(data), raw: data };
+    }
+
+    if (provider === "hf") {
+      if (!cfg.hf_key) throw new Error("Add a Hugging Face access token in Settings.");
+      const res = await fetch(HF_ROUTER + "/chat/completions", {
+        method: "POST", signal,
+        headers: { "content-type": "application/json", authorization: "Bearer " + cfg.hf_key },
+        body: JSON.stringify({ model: cfg.hf_model || DEFAULTS.hf_model, messages: [{ role: "system", content: systemPrompt }, ...messages] }),
+      });
+      if (res.status === 402) throw new Error("HTTP 402: the monthly Inference Providers credits of this Hugging Face account are used up (huggingface.co/settings/billing).");
+      const data = await readJson(res);
+      const choice = data.choices?.[0];
+      const text = choice?.message?.content ?? JSON.stringify(data);
+      if (choice?.finish_reason === "length") return { text: text + "\n\n_…output truncated by the provider. Narrow the scope or ask for a patch._", raw: data, usage: hfUsage(data) };
+      return { text, raw: data, usage: hfUsage(data) };
+    }
+
+    if (provider === "local") {
+      const endpoint = localChatUrl(cfg.local_endpoint || DEFAULTS.local_endpoint);
+      const model = cfg.local_model || DEFAULTS.local_model;
+      const headers = { "content-type": "application/json" };
+      if (cfg.local_key) headers.authorization = "Bearer " + cfg.local_key;
+      const post = (body) => fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal }).then(readJson);
+
+      if (/\/api\/generate\/?$/.test(endpoint)) { // Ollama native, single prompt
+        const prompt = messages.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`).join("\n\n") + "\n\nAssistant:";
+        const data = await post({ model, system: systemPrompt, prompt, stream: false });
+        return { text: data.response ?? JSON.stringify(data), raw: data };
+      }
+      const chat = [{ role: "system", content: systemPrompt }, ...messages];
+      if (/\/api\/chat\/?$/.test(endpoint)) { // Ollama native chat
+        const data = await post({ model, messages: chat, stream: false });
+        return { text: data.message?.content ?? JSON.stringify(data), raw: data };
+      }
+      const data = await post({ model, messages: chat }); // OpenAI-compatible
+      return { text: data.choices?.[0]?.message?.content ?? JSON.stringify(data), raw: data };
+    }
+
+    throw new Error("Unknown provider: " + provider);
+  }
+
+  /** OpenAI-style usage → the { input_tokens, output_tokens } shape the log shows. */
+  const hfUsage = (data) => data.usage ? { input_tokens: data.usage.prompt_tokens, output_tokens: data.usage.completion_tokens } : undefined;
+
+  /* ── Safe Markdown → DOM (all text is escaped first; no raw HTML from the model) ── */
+  const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  function inline(s) {
+    return esc(s)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
+      .replace(/(^|\W)_([^_\s][^_]*)_(?=\W|$)/g, "$1<em>$2</em>");
+  }
+  function renderMarkdown(md) {
+    const out = []; const lines = md.replace(/\r\n/g, "\n").split("\n");
+    let i = 0, list = null;
+    const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+    while (i < lines.length) {
+      const line = lines[i];
+      const fence = /^```(\w*)\s*$/.exec(line);
+      if (fence) {
+        closeList();
+        const buf = []; i++;
+        while (i < lines.length && !/^```\s*$/.test(lines[i])) buf.push(lines[i++]);
+        i++;
+        out.push(`<pre data-lang="${esc(fence[1])}"><code>${esc(buf.join("\n"))}</code></pre>`);
+        continue;
+      }
+      if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
+        closeList();
+        const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
+        let html = "<table><thead><tr>" + cells(line).map((c) => `<th>${c}</th>`).join("") + "</tr></thead><tbody>";
+        i += 2;
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) html += "<tr>" + cells(lines[i++]).map((c) => `<td>${c}</td>`).join("") + "</tr>";
+        out.push(html + "</tbody></table>");
+        continue;
+      }
+      const h = /^(#{1,6})\s+(.*)$/.exec(line);
+      if (h) { closeList(); const lv = Math.min(5, h[1].length + 2); out.push(`<h${lv}>${inline(h[2])}</h${lv}>`); i++; continue; }
+      const li = /^\s*([-*]|\d+[.)])\s+(.*)$/.exec(line);
+      if (li) {
+        const kind = /\d/.test(li[1]) ? "ol" : "ul";
+        if (list !== kind) { closeList(); out.push(`<${kind}>`); list = kind; }
+        out.push(`<li>${inline(li[2])}</li>`); i++; continue;
+      }
+      if (!line.trim()) { closeList(); i++; continue; }
+      closeList();
+      const para = [line]; i++;
+      while (i < lines.length && lines[i].trim() && !/^(```|#{1,6}\s|\s*([-*]|\d+[.)])\s|\s*\|)/.test(lines[i])) para.push(lines[i++]);
+      out.push(`<p>${inline(para.join(" "))}</p>`);
+    }
+    closeList();
+    return out.join("");
+  }
+
+  /* ── Styles (use the host's --color-* tokens from HFA DS; body[data-theme] switches them) ── */
+  const CSS = `
+  body.ai-open { margin-right: var(--ai-w, 440px); }
+  .ai-panel { position: fixed; top: 0; right: 0; bottom: 0; width: var(--ai-w, 440px); z-index: 50; display: flex; flex-direction: column;
+    background: var(--color-background-elevated); color: var(--color-foreground); border-left: 1px solid var(--color-foreground-subtle);
+    font: 14px/1.45 var(--font-sans, system-ui, sans-serif); box-shadow: -6px 0 18px rgba(0,0,0,.12); }
+  .ai-panel[hidden] { display: none; }
+  .ai-panel *, .ai-settings * { box-sizing: border-box; }
+  .ai-panel button, .ai-settings button { font: inherit; font-size: 13px; padding: 4px 10px; color: var(--color-foreground);
+    background: var(--color-background-base); border: 1px solid var(--color-foreground-subtle); border-radius: 6px; cursor: pointer; }
+  .ai-panel button:hover:not(:disabled), .ai-settings button:hover { border-color: var(--color-foreground); }
+  .ai-panel button:disabled { opacity: .45; cursor: not-allowed; }
+  .ai-panel button.primary { background: var(--color-brand-primary, #d70000); border-color: var(--color-brand-primary, #d70000); color: #fff; }
+  .ai-panel select, .ai-panel textarea, .ai-settings input, .ai-settings select, .ai-settings textarea { font: inherit; font-size: 13px;
+    color: var(--color-foreground); background: var(--color-background-base); border: 1px solid var(--color-foreground-subtle); border-radius: 6px; padding: 4px 6px; }
+  .ai-resize { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; }
+  .ai-resize:hover, .ai-resize:focus-visible { background: color-mix(in srgb, var(--color-foreground) 15%, transparent); outline: none; }
+  .ai-head { display: flex; gap: 6px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--color-foreground-subtle); }
+  .ai-head strong { font-size: 15px; margin-right: auto; }
+  .ai-pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--color-foreground-subtle); color: var(--color-foreground-muted); }
+  .ai-quick { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 10px; border-bottom: 1px solid var(--color-foreground-subtle); }
+  .ai-quick button { font-size: 12px; padding: 3px 8px; }
+  .ai-scope { font-size: 12px; color: var(--color-foreground-muted); padding: 6px 10px; border-bottom: 1px solid var(--color-foreground-subtle);
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .ai-scope strong { color: var(--color-foreground); font-weight: 600; }
+  .ai-scope label { display: inline-flex; gap: 4px; align-items: center; }
+  .ai-scope .folds { display: inline-flex; gap: 6px; margin-left: auto; }
+  .ai-scope .folds button { padding: 2px 8px; font-size: 12px; }
+  .ai-logwrap { position: relative; flex: 1; min-height: 120px; display: flex; flex-direction: column; }
+  .ai-log { flex: 1; min-height: 0; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+  .ai-log > * { flex: none; }
+  .ai-tobottom { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); width: 32px; height: 32px; padding: 0 !important;
+    border-radius: 50% !important; box-shadow: 0 2px 8px rgba(0,0,0,.2); font-size: 16px; line-height: 1; }
+  .ai-tobottom[hidden] { display: none; }
+  .ai-msg { border: 1px solid var(--color-foreground-subtle); border-radius: 6px; padding: 8px 12px; max-width: 100%; overflow-x: auto; }
+  .ai-msg.user { background: color-mix(in srgb, var(--color-brand-primary, #d70000) 10%, var(--color-background-elevated)); align-self: flex-end; max-width: 90%; white-space: pre-wrap; }
+  .ai-msg.assistant { background: var(--color-background-elevated); }
+  .ai-msg.error { background: color-mix(in srgb, #c70039 14%, var(--color-background-elevated)); white-space: pre-wrap; }
+  .ai-msg .meta { font-size: 11px; color: var(--color-foreground-subtle); margin-bottom: 4px; }
+  .ai-msg .meta .fold { border: 0; background: none; padding: 0 4px; margin-left: 2px; font-size: 11px; color: var(--color-foreground-muted); }
+  .ai-msg .gist { display: none; color: var(--color-foreground-muted); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ai-msg.folded .gist { display: block; }
+  .ai-msg.folded > .body { display: none; }
+  .ai-msg pre, .ai-card pre { background: var(--color-background-sunken); padding: 8px; border-radius: 4px; overflow: auto;
+    font: 12px/1.45 var(--font-mono, ui-monospace, monospace); margin: 6px 0; }
+  .ai-msg code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
+  .ai-msg table { border-collapse: collapse; margin: 6px 0; font-size: 13px; }
+  .ai-msg th, .ai-msg td { border: 1px solid var(--color-foreground-subtle); padding: 3px 6px; text-align: left; vertical-align: top; }
+  .ai-msg th { background: var(--color-background-sunken); }
+  .ai-msg h3, .ai-msg h4, .ai-msg h5 { margin: 10px 0 4px; }
+  .ai-msg p { margin: 6px 0; }
+  .ai-msg ul, .ai-msg ol { margin: 4px 0; padding-left: 22px; }
+  .ai-card { border: 1px solid var(--color-foreground-subtle); border-radius: 6px; background: var(--color-background-base); padding: 8px 12px; margin: 6px 0; }
+  .ai-card .head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .ai-card .head strong { margin-right: auto; font-size: 13px; }
+  .ai-card .head button { padding: 3px 10px; font-size: 12px; }
+  .ai-card summary { cursor: pointer; font-size: 12px; color: var(--color-foreground-muted); margin-top: 6px; }
+  .ai-status { font-size: 12px; color: var(--color-foreground-muted); padding: 0 10px 4px; min-height: 18px; }
+  .ai-chat { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--color-foreground-subtle); }
+  .ai-chat textarea { resize: vertical; min-height: 54px; max-height: 220px; width: 100%; }
+  .ai-chat .row { display: flex; gap: 6px; align-items: center; }
+  .ai-chat select { flex: 1; min-width: 0; }
+  .ai-settings { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 16px 18px; color: var(--color-foreground);
+    background: var(--color-background-elevated); border: 1px solid var(--color-foreground-subtle); border-radius: 8px; font: 14px/1.45 var(--font-sans, system-ui, sans-serif); }
+  .ai-settings::backdrop { background: rgba(0,0,0,.4); }
+  .ai-settings h2 { font-size: 16px; margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; }
+  .ai-settings fieldset { border: 1px solid var(--color-foreground-subtle); border-radius: 6px; margin: 0 0 12px; padding: 8px 10px 10px; }
+  .ai-settings fieldset[data-provider]:not(.active) { opacity: .6; }
+  .ai-settings fieldset.active { border-color: var(--color-brand-primary, #d70000); }
+  .ai-settings legend { font-weight: 600; padding: 0 4px; }
+  .ai-settings label { display: grid; gap: 2px; font-size: 13px; margin-bottom: 8px; }
+  .ai-settings label.inline { display: flex; gap: 6px; align-items: center; }
+  .ai-settings textarea { min-height: 180px; width: 100%; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
+  .ai-settings .hint { font-size: 12px; color: var(--color-foreground-muted); margin: 4px 0; }
+  .ai-settings .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  /* The panel toggle is an icon button with only hover and pressed (pressed lasts while the mouse button is down); it has no status. */
+  .ai-toggle { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; line-height: 0; }
+  .ai-toggle svg { width: 24px; height: 18px; display: block; }
+  .ai-toggle:active { background: var(--color-foreground); border-color: var(--color-foreground); color: var(--color-background-elevated); }
+  .ai-head .ai-toggle { margin-left: 0; }
+  /* Without a provider: a warning pill and a box in the log. Status is shown with the fill only. */
+  .ai-panel { --ai-warn-bg: #fad153; }
+  body[data-theme="dark"] .ai-panel { --ai-warn-bg: #544a06; }
+  .ai-pill.warning { background: var(--color-background-warning, var(--ai-warn-bg)); color: var(--color-foreground); border-color: var(--color-foreground); }
+  .ai-noprovider { background: var(--color-background-warning, var(--ai-warn-bg)); color: var(--color-foreground); border: 1px solid var(--color-foreground);
+    border-radius: 6px; padding: 8px 12px; margin: 0 0 10px; }
+  .ai-panel.no-provider .ai-msg.welcome { display: none; }
+  @media (max-width: 760px) { body.ai-open { margin-right: 0; } .ai-panel { width: 100vw; } .ai-resize { display: none; } }
+  @media print { .ai-panel, .ai-toggle { display: none !important; } body.ai-open { margin-right: 0; } }
+  `;
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     Panel
+     ═══════════════════════════════════════════════════════════════════════ */
+  function mount(cfg) {
+    const prefix = `hfa-${cfg.id}:`;
+    const MAX_W = () => Math.max(320, Math.floor(window.innerWidth * 0.7));
+
+    document.head.appendChild(el("style", { textContent: CSS }));
+
+    /* ── Markup ── */
+    const $ = {};
+    const btn = (label, props = {}) => el("button", { type: "button", textContent: label, ...props });
+    // An icon button: a window with a panel on the right. It sits at the right end of the toolbar while the panel is hidden
+    // and in the panel's header while it is open, so it is in the same place on the screen (design principle 4.7).
+    $.toggle = btn("", { className: `${cfg.buttonClass || ""} ai-toggle` });
+    $.toggle.innerHTML = '<svg viewBox="0 0 24 18" aria-hidden="true" focusable="false"><rect x=".75" y=".75" width="22.5" height="16.5" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="15.75" y1="1.5" x2="15.75" y2="16.5" stroke="currentColor" stroke-width="1.5"/></svg>';
+    $.toggle.setAttribute("aria-expanded", "true");
+    $.toggle.setAttribute("aria-controls", "ai-panel");
+    cfg.toolbar?.appendChild($.toggle);
+
+    $.panel = el("aside", { className: "ai-panel", id: "ai-panel", hidden: true, ariaLabel: cfg.title });
+    $.resize = el("div", { className: "ai-resize", tabIndex: 0, title: "Drag to resize (arrow keys work too)" });
+    $.resize.setAttribute("role", "separator");
+    $.resize.setAttribute("aria-orientation", "vertical");
+    $.pill = el("span", { className: "ai-pill" });
+    $.settingsBtn = btn("Settings…", { title: "Provider, API key, model and system prompt" });
+    const head = el("div", { className: "ai-head" }, el("strong", { textContent: cfg.title }), $.pill, $.settingsBtn);
+    $.quick = el("div", { className: "ai-quick" });
+    $.scopeText = el("span");
+    $.keep = el("input", { type: "checkbox" });
+    $.foldAll = btn("Compress", { title: "Fold every answer to one line" });
+    $.unfoldAll = btn("Expand", { title: "Open every answer" });
+    $.clear = btn("Clear", { title: "Clear the conversation" });
+    $.saveLog = btn("Export .md", { title: "Download the conversation as Markdown" });
+    const scope = el("div", { className: "ai-scope" }, $.scopeText,
+      el("label", { title: "Send the earlier questions and answers with the next question (for follow-ups)" }, $.keep, "Send earlier turns"),
+      el("span", { className: "folds" }, $.foldAll, $.unfoldAll, $.clear, $.saveLog));
+    $.log = el("div", { className: "ai-log", ariaLive: "polite" });
+    $.toBottom = btn("↓", { className: "ai-tobottom", title: "Go to the latest entry", hidden: true });
+    const logWrap = el("div", { className: "ai-logwrap" }, $.log, $.toBottom);
+    $.status = el("div", { className: "ai-status" });
+    $.prompt = el("textarea", { placeholder: `Ask about ${cfg.subject || "the analysis"}… (Enter sends, Shift+Enter for a new line)`, ariaLabel: "Question" });
+    $.modelPick = el("select", { title: "Model for the next question", ariaLabel: "Model for the next question" });
+    $.send = btn("Send", { type: "submit", className: "primary" });
+    $.chat = el("form", { className: "ai-chat" }, $.prompt, el("div", { className: "row" }, $.modelPick, $.send));
+    $.panel.append($.resize, head, $.quick, scope, logWrap, $.status, $.chat);
+    document.body.appendChild($.panel);
+
+    /* Settings dialog */
+    const field = (label, input) => el("label", {}, label, input);
+    const f = {
+      provider: el("select", {}, new Option("Anthropic Claude", "claude"), new Option("Google Gemini", "gemini"), new Option("Hugging Face (Inference Providers)", "hf"), new Option("Local (Ollama / LM Studio / LocalAI)", "local")),
+      claude_key: el("input", { type: "password", autocomplete: "off", placeholder: "sk-ant-…" }),
+      claude_model: el("input", { type: "text" }),
+      claude_max_tokens: el("input", { type: "number", min: 1024, max: 128000, step: 1024 }),
+      claude_effort: el("select", {}, ...EFFORT_ALL.map((x) => new Option(x, x))),
+      claude_fallbacks: el("input", { type: "checkbox" }),
+      gemini_key: el("input", { type: "password", autocomplete: "off" }),
+      gemini_model: el("input", { type: "text", placeholder: DEFAULTS.gemini_model }),
+      local_endpoint: el("input", { type: "url", placeholder: DEFAULTS.local_endpoint }),
+      local_model: el("input", { type: "text", placeholder: DEFAULTS.local_model }),
+      local_key: el("input", { type: "password", autocomplete: "off", placeholder: "optional" }),
+      hf_key: el("input", { type: "password", autocomplete: "off", placeholder: "hf_…" }),
+      hf_model: el("input", { type: "text", placeholder: DEFAULTS.hf_model }),
+      remember_keys: el("input", { type: "checkbox" }),
+      system_prompt: el("textarea", { spellcheck: false }),
+    };
+    const dl = (id, input) => { const list = el("datalist", { id: `${prefix}${id}` }); input.setAttribute("list", list.id); return list; };
+    const claudeList = dl("claudeModels", f.claude_model), geminiList = dl("geminiModels", f.gemini_model), localList = dl("localModels", f.local_model), hfList = dl("hfModels", f.hf_model);
+    CLAUDE_MODELS.forEach((x) => claudeList.appendChild(new Option(x.label, x.id)));
+    GEMINI_MODELS.forEach((x) => geminiList.appendChild(new Option(x, x)));
+    HF_MODELS.forEach((x) => hfList.appendChild(new Option(x, x)));
+    $.modelsState = el("span", { className: "ai-pill" });
+    $.refreshModels = btn("Refresh model list");
+    $.forgetKeys = btn("Forget stored keys");
+    $.resetPrompt = btn("Reset to default");
+    $.closeSettings = btn("Close");
+    const fs = (provider, legend, ...kids) => { const n = el("fieldset", {}, el("legend", { textContent: legend }), ...kids); n.dataset.provider = provider; return n; };
+    $.dialog = el("dialog", { className: "ai-settings", ariaLabel: "AI settings" },
+      el("h2", {}, "AI settings", $.closeSettings),
+      field("Provider", f.provider),
+      el("div", { className: "row" }, $.refreshModels, $.modelsState),
+      el("p", { className: "hint", textContent: "Only the active provider is called. Provider settings are shared by the HFA tools (STPA, HTA, Bowtie) in this browser." }),
+      fs("claude", "Anthropic Claude", field("API key", f.claude_key), field("Model", f.claude_model), claudeList,
+        field("Max output tokens", f.claude_max_tokens), field("Effort", f.claude_effort),
+        el("label", { className: "inline" }, f.claude_fallbacks, "Server-side refusal fallback (fallbacks: \"default\")"),
+        el("p", { className: "hint", textContent: "Calls api.anthropic.com directly from the browser with anthropic-dangerous-direct-browser-access. Your key is visible to anyone using this browser profile — use a restricted key." })),
+      fs("gemini", "Google Gemini", field("API key", f.gemini_key), field("Model", f.gemini_model), geminiList,
+        el("p", { className: "hint", textContent: "Sent as the x-goog-api-key header (not in the URL)." })),
+      fs("hf", "Hugging Face", field("Access token", f.hf_key), field("Model", f.hf_model), hfList,
+        el("p", { className: "hint", textContent: "Calls router.huggingface.co (OpenAI-compatible). Create a fine-grained token with \"Make calls to Inference Providers\" at huggingface.co/settings/tokens. Usage is billed to the token's account; free accounts get a small monthly credit. Add \":cheapest\", \":fastest\" or \":<provider>\" to the model id to choose who serves it." })),
+      fs("local", "Local model", field("Endpoint", f.local_endpoint), field("Model", f.local_model), localList, field("API key", f.local_key),
+        el("p", { className: "hint", textContent: "OpenAI-compatible …/v1/chat/completions, or Ollama's /api/chat or /api/generate. For Ollama from file://, start it with OLLAMA_ORIGINS=*." })),
+      el("fieldset", {}, el("legend", { textContent: "Keys" }),
+        el("label", { className: "inline" }, f.remember_keys, "Remember API keys in this browser (localStorage)"), $.forgetKeys),
+      el("fieldset", {}, el("legend", { textContent: "System prompt" }), f.system_prompt,
+        el("p", { className: "hint", textContent: "The data model, the patch format and the current analysis are always appended." }), $.resetPrompt));
+    document.body.appendChild($.dialog);
+
+    // The hosts have single-key shortcuts on document, and clear their selection on clicks elsewhere: keep keys and
+    // clicks here from reaching them, so the selection still scopes the question when Send is pressed.
+    [$.panel, $.dialog].forEach((n) => {
+      n.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key === "Escape" && n === $.panel && !busy) { e.preventDefault(); setOpen(false); }
+      });
+      ["click", "mousedown", "pointerdown"].forEach((t) => n.addEventListener(t, (e) => e.stopPropagation()));
+    });
+
+    /* ── Settings ── */
+    const PROVIDER_FIELDS = ["provider", "claude_key", "claude_model", "claude_max_tokens", "claude_effort", "claude_fallbacks",
+      "gemini_key", "gemini_model", "hf_key", "hf_model", "local_endpoint", "local_model", "local_key", "remember_keys"];
+    const SECRET_FIELDS = ["claude_key", "gemini_key", "hf_key", "local_key"];
+
+    function loadSettings() {
+      let shared = store.get(PROVIDER_KEY);
+      if (!shared) { // first use: pick up the STPA workbench's provider settings
+        const stpa = store.get("hfa-stpa:settings", {}) || {};
+        shared = Object.fromEntries(PROVIDER_FIELDS.filter((k) => stpa[k] !== undefined).map((k) => [k, stpa[k]]));
+      }
+      settings = { provider: "claude", claude_model: DEFAULTS.claude_model, claude_max_tokens: DEFAULTS.claude_max_tokens, claude_effort: "medium",
+        claude_fallbacks: true, gemini_model: DEFAULTS.gemini_model, hf_model: DEFAULTS.hf_model, local_endpoint: DEFAULTS.local_endpoint, local_model: DEFAULTS.local_model,
+        remember_keys: true, ...shared,
+        system_prompt: store.get(prefix + "ai-prompt") || cfg.systemPrompt,
+        keep_history: !!store.get(prefix + "ai-keep-history") };
+      Object.entries(f).forEach(([k, input]) => {
+        if (input.type === "checkbox") input.checked = !!settings[k]; else input.value = settings[k] ?? "";
+      });
+      $.keep.checked = settings.keep_history;
+      updateBadge();
+    }
+    function saveSettings() {
+      Object.entries(f).forEach(([k, input]) => { settings[k] = input.type === "checkbox" ? input.checked : k === "system_prompt" ? input.value : input.value.trim(); });
+      settings.keep_history = $.keep.checked;
+      const persisted = Object.fromEntries(PROVIDER_FIELDS.map((k) => [k, settings[k]]));
+      if (!settings.remember_keys) SECRET_FIELDS.forEach((k) => delete persisted[k]);
+      store.set(PROVIDER_KEY, persisted);
+      store.set(prefix + "ai-prompt", settings.system_prompt === cfg.systemPrompt ? null : settings.system_prompt);
+      store.set(prefix + "ai-keep-history", settings.keep_history);
+      updateBadge();
+    }
+
+    const providerName = () => f.provider.selectedOptions[0]?.text.replace(/ \(.*\)$/, "").replace(/^(Anthropic|Google) /, "") || settings.provider;
+    const providerLabel = () => ({
+      claude: settings.claude_model || DEFAULTS.claude_model,
+      gemini: settings.gemini_model || DEFAULTS.gemini_model,
+      hf: settings.hf_model || DEFAULTS.hf_model,
+      local: settings.local_model || DEFAULTS.local_model,
+    })[settings.provider];
+
+    /* Models the active provider reported; null until fetched (or when the fetch failed). */
+    const fetchedModels = { claude: null, gemini: null, hf: null, local: null };
+    let modelsSeq = 0;
+    async function refreshModels() {
+      const p = settings.provider, seq = ++modelsSeq;
+      $.modelsState.textContent = "loading models…";
+      try {
+        const list = await listModels(p);
+        if (seq !== modelsSeq) return;
+        fetchedModels[p] = list;
+        $.modelsState.textContent = `${list.length} models from provider`;
+      } catch (e) {
+        if (seq !== modelsSeq) return;
+        fetchedModels[p] = null;
+        $.modelsState.textContent = p === "local" ? "model list unavailable" : "built-in model list";
+        $.modelsState.title = e.message;
+      }
+      updateBadge();
+    }
+
+    /** Fill the model picker for the current provider: the provider's own list when it could be fetched, else the
+        built-in list. A custom id from Settings is kept as an extra entry. */
+    function updateBadge() {
+      const pick = $.modelPick, p = settings.provider, cur = providerLabel();
+      $.dialog.querySelectorAll("fieldset[data-provider]").forEach((n) => n.classList.toggle("active", n.dataset.provider === p));
+      applyState();
+      pick.replaceChildren();
+      const fetched = fetchedModels[p];
+      const family = (id) => CLAUDE_MODELS.find((x) => x.id === id)?.family || "Other";
+      if (fetched) {
+        const groups = p === "claude" ? [...new Set(fetched.map((m) => family(m.id)))] : [null];
+        groups.forEach((fam) => {
+          const parent = fam && groups.length > 1 ? pick.appendChild(el("optgroup", { label: fam })) : pick;
+          fetched.filter((m) => !fam || family(m.id) === fam)
+            .forEach((m) => parent.appendChild(new Option(m.label === m.id ? m.id : `${m.label} (${m.id})`, m.id)));
+        });
+      } else if (p === "claude") {
+        [...new Set(CLAUDE_MODELS.map((x) => x.family))].forEach((fam) => {
+          const og = el("optgroup", { label: fam });
+          CLAUDE_MODELS.filter((x) => x.family === fam).forEach((x) => og.appendChild(new Option(`${x.label} (${x.id})`, x.id)));
+          pick.appendChild(og);
+        });
+      } else if (p === "gemini") GEMINI_MODELS.forEach((id) => pick.appendChild(new Option(id, id)));
+      else if (p === "hf") HF_MODELS.forEach((id) => pick.appendChild(new Option(id, id)));
+      if (![...pick.options].some((o) => o.value === cur)) pick.appendChild(new Option(p === "local" || p === "hf" ? cur : `${cur} (custom)`, cur));
+      pick.value = cur;
+      const list = { claude: claudeList, gemini: geminiList, hf: hfList, local: localList }[p];
+      if (list && fetched) list.replaceChildren(...fetched.map((m) => new Option(m.label, m.id)));
+    }
+
+    $.modelPick.addEventListener("change", (e) => { f[settings.provider + "_model"].value = e.target.value; saveSettings(); });
+    // Browsers only suggest datalist entries matching the field's text; empty the field while it has focus.
+    ["claude_model", "gemini_model", "hf_model", "local_model"].forEach((k) => {
+      const input = f[k];
+      input.addEventListener("focus", () => { input.dataset.prev = input.value; input.dataset.ph = input.placeholder; input.placeholder = input.value || input.placeholder; input.value = ""; });
+      input.addEventListener("blur", () => { if (!input.value.trim() && input.dataset.prev) { input.value = input.dataset.prev; saveSettings(); } input.placeholder = input.dataset.ph || ""; });
+    });
+    Object.values(f).forEach((input) => input.addEventListener("change", saveSettings));
+    $.keep.addEventListener("change", saveSettings);
+    ["provider", "claude_key", "gemini_key", "hf_key", "local_endpoint", "local_key"].forEach((k) => f[k].addEventListener("change", () => {
+      if (k === "provider" || k.startsWith(settings.provider + "_")) refreshModels();
+    }));
+    $.refreshModels.addEventListener("click", refreshModels);
+    $.forgetKeys.addEventListener("click", () => { SECRET_FIELDS.forEach((k) => { f[k].value = ""; }); saveSettings(); setStatus("Stored API keys removed."); });
+    $.resetPrompt.addEventListener("click", () => { f.system_prompt.value = cfg.systemPrompt; saveSettings(); });
+    $.settingsBtn.addEventListener("click", () => { $.dialog.showModal(); f.provider.focus(); });
+    $.closeSettings.addEventListener("click", () => $.dialog.close());
+
+    /* ── Open / close / resize ── */
+    const setWidth = (w) => {
+      const px = Math.round(Math.min(MAX_W(), Math.max(320, w)));
+      document.body.style.setProperty("--ai-w", px + "px");
+      $.resize.setAttribute("aria-valuenow", String(px));
+      return px;
+    };
+    let width = setWidth(store.get(prefix + "ai-width") || 440);
+    const relayout = () => window.dispatchEvent(new Event("resize")); // hosts redraw connectors on resize
+    function setOpen(open, { focus = true, remember = true } = {}) {
+      const hadFocus = document.activeElement === $.toggle;
+      $.panel.hidden = !open;
+      document.body.classList.toggle("ai-open", open);
+      // the toggle moves between the toolbar (hidden) and the panel header (open); the keyboard focus goes with it
+      (open ? head : cfg.toolbar)?.appendChild($.toggle);
+      const label = open ? "Hide AI panel" : "Show AI panel";
+      $.toggle.title = `${label} (A)`;
+      $.toggle.setAttribute("aria-label", label);
+      $.toggle.setAttribute("aria-expanded", String(open));
+      if (remember) store.set(prefix + "ai-open", open);
+      if (open) { updateScope(); if (focus) $.prompt.focus(); }
+      else if (hadFocus) $.toggle.focus();
+      relayout();
+    }
+    $.toggle.addEventListener("click", () => setOpen($.panel.hidden));
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "a" && e.key !== "A") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = document.activeElement;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (document.querySelector("dialog[open]")) return;
+      e.preventDefault();
+      setOpen($.panel.hidden);
+    });
+    let drag = null;
+    $.resize.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, w: width }; $.resize.setPointerCapture(e.pointerId); e.preventDefault(); });
+    $.resize.addEventListener("pointermove", (e) => { if (drag) { width = setWidth(drag.w + drag.x - e.clientX); relayout(); } });
+    const endDrag = () => { if (drag) { drag = null; store.set(prefix + "ai-width", width); } };
+    $.resize.addEventListener("pointerup", endDrag);
+    $.resize.addEventListener("pointercancel", endDrag);
+    $.resize.addEventListener("keydown", (e) => {
+      const step = { ArrowLeft: 40, ArrowRight: -40 }[e.key];
+      if (step === undefined) return;
+      e.preventDefault();
+      width = setWidth(width + step); store.set(prefix + "ai-width", width); relayout();
+    });
+
+    /* ── Scope (the host's selection) ── */
+    function currentScope() {
+      try { return cfg.getScope?.() || null; } catch { return null; }
+    }
+    function updateScope() {
+      const s = currentScope();
+      $.scopeText.replaceChildren("Scope: ", el("strong", { textContent: s ? s.label : "whole analysis" }));
+    }
+    // Selection changes happen on clicks and keys in the host (which may stop propagation): listen in the capture
+    // phase and refresh the scope line once the host has handled the event.
+    ["click", "keyup"].forEach((t) => document.addEventListener(t, () => { if (!$.panel.hidden) setTimeout(updateScope, 0); }, true));
+
+    /* ── Chat loop ── */
+    let history = [];      // finished turns, sent only when "Send earlier turns" is on
+    let busy = null;       // AbortController while a request runs
+    const transcript = []; // for Markdown export
+
+    function buildSystemPrompt() {
+      const ctx = cfg.getContext();
+      const schema = typeof cfg.schemaPrompt === "function" ? cfg.schemaPrompt() : cfg.schemaPrompt || "";
+      return `${settings.system_prompt || cfg.systemPrompt}${schema}\n\n${cfg.contextLabel || "Current analysis (JSON)"}:\n${JSON.stringify(ctx, null, 2)}`;
+    }
+    function scopePreamble(s) {
+      if (!s) return "";
+      return `Analysis scope: I selected ${s.label}. Focus on the selected elements and their direct relations. Use the rest of the analysis only as context, and keep any change to a patch.\nSelected elements (JSON):\n${JSON.stringify(s.items, null, 2)}\n\nQuestion:\n`;
+    }
+
+    async function send(userText) {
+      if (busy || !userText.trim()) return;
+      const s = currentScope();
+      addMessage("user", userText, `Scope: ${s ? s.label : "whole analysis"}`);
+      const prior = settings.keep_history ? history : [];
+      const turn = [{ role: "user", content: scopePreamble(s) + userText }];
+      busy = new AbortController();
+      setBusy(true);
+      const model = providerLabel();
+      try {
+        setStatus(`Waiting for ${model}…`);
+        const t0 = performance.now();
+        const { text, usage } = await callLLM({ provider: settings.provider, systemPrompt: buildSystemPrompt(), messages: [...prior, ...turn], signal: busy.signal,
+          onProgress: (n) => setStatus(`Receiving from ${model}… ${n.toLocaleString()} characters`) });
+        turn.push({ role: "assistant", content: text });
+        const tokens = usage ? ` · ${(usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)} in / ${usage.output_tokens ?? "?"} out tokens` : "";
+        addMessage("assistant", text, `${model} · ${((performance.now() - t0) / 1000).toFixed(1)} s${tokens}`);
+        history.push(...turn);
+        setStatus("");
+      } catch (e) {
+        addMessage("error", e.name === "AbortError" ? "Request cancelled." : explainError(e));
+        setStatus("");
+      } finally {
+        busy = null; setBusy(false);
+      }
+    }
+
+    function explainError(e) {
+      let msg = e.message || String(e);
+      if (e instanceof TypeError && /fetch|network/i.test(msg)) {
+        msg += settings.provider === "local"
+          ? "\nCould not reach the local endpoint. Check it is running and allows this origin (Ollama: set OLLAMA_ORIGINS=*; LM Studio: enable CORS)."
+          : "\nNetwork error — check your connection, proxy or browser extensions.";
+      }
+      return msg;
+    }
+
+    /** A provider is set up when its key (or, for a local model, its address) is there. The pill shows the chosen provider,
+        not whether the connection answers. */
+    function isConfigured() {
+      const s = settings;
+      return { claude: !!s.claude_key, gemini: !!s.gemini_key, hf: !!s.hf_key, local: !!(s.local_endpoint || DEFAULTS.local_endpoint) }[s.provider] || false;
+    }
+    const PLACEHOLDER = `Ask about ${cfg.subject || "the analysis"}… (Enter sends, Shift+Enter for a new line)`;
+    /** One primary button at a time (design principle 4.5): Send, or Settings… when no provider is set up. */
+    function applyState(busyNow = !!busy) {
+      const ok = isConfigured();
+      $.panel.classList.toggle("no-provider", !ok);
+      $.pill.textContent = ok ? providerName() : "No provider";
+      $.pill.classList.toggle("warning", !ok);
+      $.settingsBtn.classList.toggle("primary", !ok);
+      $.send.textContent = busyNow ? "Stop" : "Send";
+      $.send.classList.toggle("primary", ok && !busyNow);
+      $.send.disabled = !ok && !busyNow;
+      $.prompt.disabled = !ok;
+      $.prompt.placeholder = ok ? PLACEHOLDER : "Set up a provider in Settings… first";
+      $.quick.querySelectorAll("button").forEach((b) => (b.disabled = busyNow || !ok));
+      const box = $.log.querySelector(".ai-noprovider");
+      if (ok && box) box.remove();
+      if (!ok && !box) $.log.prepend(el("div", { className: "ai-noprovider", textContent: "The AI assistant is not set up yet. Open Settings…, choose a provider (Claude, Gemini, Hugging Face or a local model) and enter its key or address. Then the question field works." }));
+    }
+    function setBusy(on) { applyState(on); }
+    const setStatus = (t) => ($.status.textContent = t);
+
+    function addMessage(kind, text, meta) {
+      const div = el("div", { className: "ai-msg " + kind });
+      if (meta) div.appendChild(el("div", { className: "meta", textContent: meta }));
+      if (kind === "user" || kind === "error") div.appendChild(document.createTextNode(text));
+      else {
+        const body = el("div", { className: "body" });
+        body.innerHTML = renderMarkdown(text); // safe: renderMarkdown escapes all model text
+        div.appendChild(body);
+        if (kind === "assistant") attachJsonActions(body);
+        if (meta) addFold(div, text);
+      }
+      $.log.appendChild(div);
+      // An answer opens at its first line; questions and errors sit at the bottom.
+      div.scrollIntoView?.({ block: kind === "assistant" ? "start" : "end", behavior: "smooth" });
+      transcript.push({ kind, text, meta });
+      updateToBottom();
+    }
+
+    /** The caret after an answer's meta line folds the answer to one line of its text; the line or the caret opens it again. */
+    function addFold(div, text) {
+      const fold = btn("", { className: "fold" });
+      const gist = el("div", { className: "gist" });
+      gist.textContent = text.replace(/```[\s\S]*?```/g, " [code] ").replace(/[#*_`|>]+|:?-{3,}:?/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+      fold.addEventListener("click", () => setFolded(div, !div.classList.contains("folded")));
+      gist.addEventListener("click", () => setFolded(div, false));
+      div.querySelector(".meta").appendChild(fold);
+      div.querySelector(".body").before(gist);
+      setFolded(div, false);
+    }
+    function setFolded(div, folded) {
+      const fold = div.querySelector(".meta .fold");
+      div.classList.toggle("folded", folded);
+      fold.textContent = folded ? "▸" : "▾";
+      fold.title = folded ? "Show the answer" : "Hide the answer";
+      fold.setAttribute("aria-label", fold.title);
+      fold.setAttribute("aria-expanded", String(!folded));
+      updateToBottom();
+    }
+    const foldAll = (folded) => $.log.querySelectorAll(".ai-msg").forEach((div) => { if (div.querySelector(":scope > .meta .fold")) setFolded(div, folded); });
+    $.foldAll.addEventListener("click", () => foldAll(true));
+    $.unfoldAll.addEventListener("click", () => foldAll(false));
+
+    function updateToBottom() { $.toBottom.hidden = $.log.scrollHeight - $.log.scrollTop - $.log.clientHeight < 40; }
+    $.log.addEventListener("scroll", updateToBottom, { passive: true });
+    $.toBottom.addEventListener("click", () => $.log.scrollTo({ top: $.log.scrollHeight, behavior: "smooth" }));
+
+    /** A ```json block the host can apply becomes a card: actions on top, the JSON folded below. */
+    function attachJsonActions(body) {
+      body.querySelectorAll('pre[data-lang="json"]').forEach((pre) => {
+        let obj; try { obj = JSON.parse(pre.textContent); } catch { return; }
+        if (!obj || typeof obj !== "object") return;
+        let info; try { info = cfg.inspect(obj); } catch { info = null; }
+        if (!info) return;
+        const copy = btn("Copy JSON");
+        copy.addEventListener("click", async () => {
+          try { await navigator.clipboard.writeText(JSON.stringify(obj, null, 2)); copy.textContent = "Copied"; }
+          catch { copy.textContent = "Copy failed"; }
+        });
+        const apply = btn(info.applyLabel || "Apply", { className: "ai-apply" });
+        const revert = btn("Revert", { hidden: true, title: "Restore the analysis as it was before this was applied" });
+        let before = null;
+        apply.addEventListener("click", () => {
+          if (info.confirm && !confirm(info.confirm)) return;
+          try {
+            before = cfg.snapshot();
+            const msg = cfg.apply(obj);
+            if (msg === false) { before = null; return; }
+            apply.textContent = "Applied"; apply.disabled = true; revert.hidden = false;
+            setStatus(msg || "Applied.");
+            updateScope();
+          } catch (e) {
+            before = null;
+            setStatus("Could not apply: " + (e.message || e));
+          }
+        });
+        revert.addEventListener("click", () => {
+          if (before === null) return;
+          cfg.restore(before); before = null;
+          revert.hidden = true; apply.disabled = false; apply.textContent = info.applyLabel || "Apply";
+          setStatus("Reverted.");
+        });
+        const card = el("div", { className: "ai-card" }, el("div", { className: "head" }, el("strong", { textContent: info.title }), copy, apply, revert));
+        pre.before(card);
+        const details = el("details", {}, el("summary", { textContent: "Show JSON" }));
+        details.append(pre);
+        card.append(details);
+      });
+    }
+
+    function renderQuick() {
+      $.quick.replaceChildren(...(cfg.quickActions || []).map(([label, prompt]) => {
+        const b = btn(label, { title: prompt });
+        b.addEventListener("click", () => send(prompt));
+        return b;
+      }));
+    }
+
+    $.chat.addEventListener("submit", (e) => {
+      e.preventDefault();
+      if (busy) { busy.abort(); return; }
+      const t = $.prompt.value; $.prompt.value = ""; send(t);
+    });
+    // Enter sends, Shift+Enter gives a new line (design principle 4.6). Nothing is sent from an empty field,
+    // while a reply is running (only Stop ends it) or while an input method (IME) is composing.
+    $.prompt.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      if (!busy && $.prompt.value.trim()) $.chat.requestSubmit();
+    });
+    /** Clears the conversation; the tools also call it on New, since earlier turns concern the old analysis. */
+    function clearConversation() { if (busy) busy.abort(); history = []; transcript.length = 0; $.log.replaceChildren(); applyState(); setStatus(""); updateToBottom(); }
+    $.clear.addEventListener("click", clearConversation);
+    $.saveLog.addEventListener("click", () => {
+      const md = [`# ${cfg.title}`, "", `_Exported ${new Date().toISOString()} · ${providerLabel()}_`, "",
+        "## Analysis", "", "```json", JSON.stringify(cfg.getContext(), null, 2), "```", "",
+        ...transcript.map((t) => t.kind === "user" ? `## ▶ ${t.text}\n` : `${t.meta ? `_${t.meta}_\n\n` : ""}${t.text}\n`)].join("\n");
+      download(`${cfg.exportName || cfg.id + "-analysis"}.md`, md, "text/markdown");
+    });
+
+    /* ── Boot ── */
+    loadSettings();
+    renderQuick();
+    if (cfg.welcome) { addMessage("assistant", cfg.welcome); $.log.lastElementChild?.classList.add("welcome"); }
+    applyState();
+    // Open by default; a choice made with the toggle is remembered.
+    setOpen(store.get(prefix + "ai-open") !== false, { focus: false, remember: false });
+    refreshModels();
+
+    return { open: () => setOpen(true), close: () => setOpen(false), send, clear: clearConversation, get settings() { return settings; } };
+  }
+
+  window.HFAAssist = { mount, renderMarkdown, CLAUDE_MODELS };
+})();
+
+</script>
+
+<script>
+"use strict";
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   1. Storage helpers — every access is guarded (private windows can throw).
+   ═══════════════════════════════════════════════════════════════════════════ */
+const LS_PREFIX = "hfa-stpa:";
+const store = {
+  get(k, fallback = null) { try { const v = localStorage.getItem(LS_PREFIX + k); return v === null ? fallback : JSON.parse(v); } catch { return fallback; } },
+  set(k, v) { try { localStorage.setItem(LS_PREFIX + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
+  del(k) { try { localStorage.removeItem(LS_PREFIX + k); } catch { /* storage unavailable */ } },
+};
+const $ = (id) => document.getElementById(id);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2. Presets and STPA model validation
+   Schema (all arrays optional except controllers/controlled_processes):
+     system, losses[{id,description}], hazards[{id,description,losses[]}],
+     constraints[{id,description,hazards[]}],
+     ucas[{id,control_action,type,context,hazards[]}]
+       (type: not_provided | provided_unsafe | wrong_timing | wrong_duration),
+     controllers[{id,name,level?,process_model:{variables[],assumptions[]}}],
+     controlled_processes[{id,name,states[]}],
+     control_actions[{id,source,target,action,parameters[]}]   (action: a label or a list of labels),
+     feedback[{id,source,target,signal,latency_tolerance_ms?}]   (signal: a label or a list of labels),
+     actuators[{id,name,target,actuation?,converted_from?}]   (target: a controlled process),
+     sensors[{id,name,source,measures?,converted_from?}]       (source: a controlled process)
+   A control action may target another controller (hierarchical structures) or an
+   actuator; feedback may come from a sensor. The actuator then acts on its target
+   process and the sensor measures its source process, which closes the loop.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const PRESETS = {
+  "Autonomous Emergency Braking (AEB)": {
+    system: "Autonomous Emergency Braking (AEB)",
+    losses: [
+      { id: "L1", description: "Loss of life or injury to vehicle occupants or other road users" },
+      { id: "L2", description: "Damage to the vehicle or objects outside the vehicle" }
+    ],
+    hazards: [
+      { id: "H1", description: "Vehicle does not maintain safe distance from obstacles", losses: ["L1", "L2"] },
+      { id: "H2", description: "Vehicle decelerates unnecessarily in traffic", losses: ["L1", "L2"] }
+    ],
+    constraints: [
+      { id: "SC1", description: "Braking must be applied when time-to-collision falls below the threshold", hazards: ["H1"] },
+      { id: "SC2", description: "Braking must not be applied without a confirmed obstacle", hazards: ["H2"] }
+    ],
+    controllers: [
+      { id: "c0", name: "Driver", level: 0,
+        process_model: { variables: ["PerceivedObstacle", "VehicleSpeed"], assumptions: ["Driver monitors the road"] } },
+      { id: "c1", name: "AEB Electronic Control Unit", level: 1,
+        process_model: { variables: ["ObstacleDistance", "RelativeSpeed", "BrakeStatus"], assumptions: ["Sensor inputs arrive within 10ms"] } }
+    ],
+    controlled_processes: [
+      { id: "p1", name: "Vehicle Braking Subsystem", states: ["Disengaged", "Applying", "FullyLocked"] }
+    ],
+    control_actions: [
+      { id: "ca0", source: "c0", target: "c1", action: "Enable/Override AEB", parameters: ["Mode"] },
+      { id: "ca1", source: "c1", target: "p1", action: "ApplyBrakingForce", parameters: ["PressureLevel"] },
+      { id: "ca2", source: "c0", target: "p1", action: "PressBrakePedal", parameters: ["PedalForce"] }
+    ],
+    feedback: [
+      { id: "fb0", source: "c1", target: "c0", signal: "AEB warning chime / HMI status", latency_tolerance_ms: 200 },
+      { id: "fb1", source: "p1", target: "c1", signal: "WheelSpeedSensorData", latency_tolerance_ms: 20 },
+      { id: "fb2", source: "p1", target: "c0", signal: "Felt deceleration", latency_tolerance_ms: 500 }
+    ],
+    ucas: [
+      { id: "UCA-1", control_action: "ca1", type: "not_provided", context: "an obstacle is within braking distance and time-to-collision is below the threshold", hazards: ["H1"] },
+      { id: "UCA-2", control_action: "ca1", type: "provided_unsafe", context: "no obstacle is present (false positive detection)", hazards: ["H2"] },
+      { id: "UCA-3", control_action: "ca1", type: "wrong_timing", context: "braking is applied after time-to-collision has already passed the threshold", hazards: ["H1"] },
+      { id: "UCA-4", control_action: "ca1", type: "wrong_duration", context: "braking continues after the obstacle has been cleared", hazards: ["H2"] }
+    ]
+  },
+
+  "Railway level crossing": {
+    system: "Automatic railway level crossing with remote supervision",
+    losses: [
+      { id: "L1", description: "Death or injury to road users, train passengers or staff" },
+      { id: "L2", description: "Damage to rolling stock, vehicles or infrastructure" },
+      { id: "L3", description: "Loss of traffic availability (rail or road)" }
+    ],
+    hazards: [
+      { id: "H1", description: "Road user is on the crossing when a train occupies it", losses: ["L1", "L2"] },
+      { id: "H2", description: "Crossing remains closed long after the train has passed", losses: ["L3"] }
+    ],
+    constraints: [
+      { id: "SC1", description: "Barriers must be fully lowered before the train reaches the strike-out point", hazards: ["H1"] },
+      { id: "SC2", description: "Barriers must open within 30 s after the train has cleared the crossing", hazards: ["H2"] }
+    ],
+    controllers: [
+      { id: "c1", name: "Traffic Control Centre", level: 0,
+        process_model: { variables: ["CrossingStatus", "TrainPositions"], assumptions: ["Fault alarms are reported within 5 s"] } },
+      { id: "c2", name: "Interlocking / Crossing Controller", level: 1,
+        process_model: { variables: ["TrackOccupancy", "BarrierPosition", "LampStatus"], assumptions: ["Axle counters are reset correctly after maintenance"] } },
+      { id: "c3", name: "Train Driver", level: 1,
+        process_model: { variables: ["CrossingProtected", "TrainSpeed"], assumptions: ["Signal aspect reflects crossing state"] } }
+    ],
+    controlled_processes: [
+      { id: "p1", name: "Barriers and road signals", states: ["Raised", "Lowering", "Lowered", "Faulty"] },
+      { id: "p2", name: "Train", states: ["Approaching", "Occupying", "Cleared"] }
+    ],
+    control_actions: [
+      { id: "ca1", source: "c1", target: "c2", action: "Manual close / reset", parameters: ["CrossingId"] },
+      { id: "ca2", source: "c2", target: "p1", action: "Lower barriers", parameters: ["WarningTime_s"] },
+      { id: "ca3", source: "c2", target: "p1", action: "Raise barriers", parameters: [] },
+      { id: "ca4", source: "c3", target: "p2", action: "Brake / traction", parameters: ["Demand"] }
+    ],
+    feedback: [
+      { id: "fb1", source: "c2", target: "c1", signal: "Crossing status & fault alarms", latency_tolerance_ms: 5000 },
+      { id: "fb2", source: "p1", target: "c2", signal: "Barrier position detection", latency_tolerance_ms: 500 },
+      { id: "fb3", source: "p2", target: "c2", signal: "Track circuit / axle counter occupancy", latency_tolerance_ms: 300 },
+      { id: "fb4", source: "c2", target: "c3", signal: "Crossing protection signal aspect", latency_tolerance_ms: 1000 },
+      { id: "fb5", source: "p2", target: "c3", signal: "Speed indication (DMI)", latency_tolerance_ms: 500 }
+    ],
+    ucas: [
+      { id: "UCA-1", control_action: "ca2", type: "not_provided", context: "a train is approaching and the crossing has not been closed", hazards: ["H1"] },
+      { id: "UCA-2", control_action: "ca3", type: "wrong_timing", context: "barriers are raised before the train has cleared the crossing", hazards: ["H1"] }
+    ]
+  },
+
+  "Insulin pump (closed loop)": {
+    system: "Closed-loop insulin delivery",
+    losses: [{ id: "L1", description: "Patient harm (hypo- or hyperglycaemia)" }],
+    hazards: [
+      { id: "H1", description: "Insulin delivered exceeds patient need", losses: ["L1"] },
+      { id: "H2", description: "Insulin delivered is below patient need for a prolonged time", losses: ["L1"] }
+    ],
+    constraints: [{ id: "SC1", description: "Dose must not be delivered when glucose is below 70 mg/dL", hazards: ["H1"] }],
+    controllers: [
+      { id: "c1", name: "Patient", level: 0, process_model: { variables: ["MealSize", "FeelsHypo"], assumptions: ["Patient announces meals"] } },
+      { id: "c2", name: "Dosing algorithm", level: 1, process_model: { variables: ["Glucose", "InsulinOnBoard", "Trend"], assumptions: ["CGM readings every 5 min"] } }
+    ],
+    controlled_processes: [{ id: "p1", name: "Pump & patient physiology", states: ["Idle", "Basal", "Bolus", "Suspended"] }],
+    control_actions: [
+      { id: "ca1", source: "c1", target: "c2", action: "Announce meal / set target", parameters: ["Carbs_g"] },
+      { id: "ca2", source: "c2", target: "p1", action: "Deliver insulin", parameters: ["Units", "Rate"] },
+      { id: "ca3", source: "c2", target: "p1", action: "Suspend delivery", parameters: [] }
+    ],
+    feedback: [
+      { id: "fb1", source: "p1", target: "c2", signal: "CGM glucose reading", latency_tolerance_ms: 300000 },
+      { id: "fb2", source: "c2", target: "c1", signal: "Alerts and dose history", latency_tolerance_ms: 60000 }
+    ],
+    ucas: [
+      { id: "UCA-1", control_action: "ca2", type: "provided_unsafe", context: "glucose is below 70 mg/dL", hazards: ["H1"] },
+      { id: "UCA-2", control_action: "ca2", type: "not_provided", context: "glucose has been above target for a prolonged period", hazards: ["H2"] }
+    ]
+  }
+};
+
+/** Parse editor text; returns { model, error } with a line/column for syntax errors. */
+function parseModel(text) {
+  try { return { model: JSON.parse(text) }; }
+  catch (e) {
+    const m = /position (\d+)/.exec(e.message);
+    if (m) {
+      const pos = +m[1], before = text.slice(0, pos);
+      const line = before.split("\n").length, col = pos - before.lastIndexOf("\n");
+      return { error: `JSON syntax error at line ${line}, column ${col}: ${e.message}`, pos };
+    }
+    return { error: "JSON syntax error: " + e.message };
+  }
+}
+
+/** Structural STPA checks. Errors break the model; warnings are analysis hints. */
+function validateModel(m) {
+  const errors = [], warnings = [];
+  if (!m || typeof m !== "object" || Array.isArray(m)) return { errors: ["Root must be a JSON object"], warnings };
+  const arr = (k) => Array.isArray(m[k]) ? m[k] : (m[k] === undefined ? [] : (errors.push(`"${k}" must be an array`), []));
+  const controllers = arr("controllers"), processes = arr("controlled_processes");
+  const cas = arr("control_actions"), fbs = arr("feedback");
+  const losses = arr("losses"), hazards = arr("hazards"), constraints = arr("constraints"), ucas = arr("ucas");
+  const actuators = arr("actuators"), sensors = arr("sensors");
+  if (!m.system) warnings.push(`Missing "system" name`);
+  if (!controllers.length) errors.push("At least one controller is required");
+  if (!processes.length) warnings.push("No controlled processes defined");
+
+  const ids = new Map();
+  const reg = (kind, list) => list.forEach((x, i) => {
+    if (!x || typeof x !== "object") return errors.push(`${kind}[${i}] must be an object`);
+    if (!x.id) return errors.push(`${kind}[${i}] is missing "id"`);
+    if (ids.has(x.id)) errors.push(`Duplicate id "${x.id}" (${ids.get(x.id)} and ${kind})`);
+    else ids.set(x.id, kind);
+  });
+  reg("controllers", controllers); reg("controlled_processes", processes);
+  reg("control_actions", cas); reg("feedback", fbs);
+  reg("losses", losses); reg("hazards", hazards); reg("constraints", constraints); reg("ucas", ucas);
+  reg("actuators", actuators); reg("sensors", sensors);
+
+  const isCtrl = (id) => ids.get(id) === "controllers";
+  const isProc = (id) => ids.get(id) === "controlled_processes";
+  const isNode = (id) => ["controllers", "controlled_processes", "actuators", "sensors"].includes(ids.get(id));
+  actuators.forEach((a) => {
+    if (!a || !a.id) return;
+    if (!isProc(a.target)) errors.push(`Actuator ${a.id}: target "${a.target}" is not a controlled process`);
+    if (!cas.some((ca) => ca && ca.target === a.id)) warnings.push(`Actuator "${a.name || a.id}" receives no control actions`);
+  });
+  sensors.forEach((s) => {
+    if (!s || !s.id) return;
+    if (!isProc(s.source)) errors.push(`Sensor ${s.id}: source "${s.source}" is not a controlled process`);
+    if (!fbs.some((fb) => fb && fb.source === s.id)) warnings.push(`Sensor "${s.name || s.id}" sends no feedback`);
+  });
+  cas.forEach((ca) => {
+    if (!ca || !ca.id) return;
+    if (!isCtrl(ca.source)) errors.push(`Control action ${ca.id}: source "${ca.source}" is not a controller`);
+    if (!isNode(ca.target)) errors.push(`Control action ${ca.id}: target "${ca.target}" does not exist`);
+    if (ca.action !== undefined && !(typeof ca.action === "string" || (Array.isArray(ca.action) && ca.action.every((x) => typeof x === "string"))))
+      errors.push(`Control action ${ca.id}: "action" must be a label or a list of labels`);
+    else if (!labelsOf(ca.action).length) warnings.push(`Control action ${ca.id} has no "action" label`);
+  });
+  fbs.forEach((fb) => {
+    if (!fb || !fb.id) return;
+    if (!isNode(fb.source)) errors.push(`Feedback ${fb.id}: source "${fb.source}" does not exist`);
+    if (!isCtrl(fb.target)) errors.push(`Feedback ${fb.id}: target "${fb.target}" is not a controller`);
+    if (fb.signal !== undefined && !(typeof fb.signal === "string" || (Array.isArray(fb.signal) && fb.signal.every((x) => typeof x === "string"))))
+      errors.push(`Feedback ${fb.id}: "signal" must be a label or a list of labels`);
+    if (fb.latency_tolerance_ms !== undefined && !(typeof fb.latency_tolerance_ms === "number" && fb.latency_tolerance_ms >= 0))
+      errors.push(`Feedback ${fb.id}: latency_tolerance_ms must be a non-negative number`);
+  });
+  hazards.forEach((h) => (h.losses || []).forEach((l) => { if (ids.get(l) !== "losses") warnings.push(`Hazard ${h.id} references unknown loss "${l}"`); }));
+  constraints.forEach((c) => (c.hazards || []).forEach((h) => { if (ids.get(h) !== "hazards") warnings.push(`Constraint ${c.id} references unknown hazard "${h}"`); }));
+  const UCA_TYPES = ["not_provided", "provided_unsafe", "wrong_timing", "wrong_duration"];
+  ucas.forEach((u) => {
+    if (!u || !u.id) return;
+    if (!u.control_action) errors.push(`UCA ${u.id} is missing "control_action"`);
+    else if (!cas.some((c) => c && c.id === u.control_action)) errors.push(`UCA ${u.id}: control_action "${u.control_action}" does not exist`);
+    if (!u.type) warnings.push(`UCA ${u.id} has no "type"`);
+    else if (!UCA_TYPES.includes(u.type)) errors.push(`UCA ${u.id}: type "${u.type}" must be one of ${UCA_TYPES.join(", ")}`);
+    if (!u.context) warnings.push(`UCA ${u.id} has no "context"`);
+    (u.hazards || []).forEach((h) => { if (ids.get(h) !== "hazards") warnings.push(`UCA ${u.id} references unknown hazard "${h}"`); });
+  });
+
+  // STPA hints: every control action should have a feedback path closing the loop (through an actuator/sensor pair, if any).
+  const { acted, measured } = loopEnds(m);
+  cas.forEach((ca) => {
+    if (!ca || !isCtrl(ca.source) || !isNode(ca.target)) return;
+    if (!fbs.some((fb) => fb && fb.target === ca.source && (fb.source === ca.target || measured(fb.source) === acted(ca.target))))
+      warnings.push(`Open loop: no feedback from "${acted(ca.target)}" to "${ca.source}" for ${ca.id} (${labelText(ca.action)})`);
+  });
+  processes.forEach((p) => {
+    if (p && p.id && !cas.some((ca) => ca && ca.target === p.id) && !actuators.some((a) => a && a.target === p.id))
+      warnings.push(`Process "${p.name || p.id}" receives no control actions`);
+  });
+  controllers.forEach((c) => {
+    if (!c || !c.id) return;
+    const vars = c.process_model && c.process_model.variables;
+    if (!Array.isArray(vars) || !vars.length) warnings.push(`Controller "${c.name || c.id}" has no process-model variables`);
+  });
+  return { errors, warnings };
+}
+
+/** acted(id): the process an actuator acts on (else id); measured(id): the process a sensor measures (else id). */
+function loopEnds(m) {
+  const act = new Map((Array.isArray(m.actuators) ? m.actuators : []).filter((a) => a && a.id).map((a) => [a.id, a.target]));
+  const sens = new Map((Array.isArray(m.sensors) ? m.sensors : []).filter((s) => s && s.id).map((s) => [s.id, s.source]));
+  return { acted: (id) => act.get(id) ?? id, measured: (id) => sens.get(id) ?? id };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3. Control-structure diagram (SVG, built with createElementNS — no innerHTML)
+   Layout: controllers ranked top-down by control authority (explicit "level"
+   wins), controlled processes on the bottom row. Control actions go down on the
+   left of each node pair, feedback goes up on the right (dashed).
+   ═══════════════════════════════════════════════════════════════════════════ */
+const SVGNS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs, text) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+const trunc = (s, n) => (s = String(s ?? "")).length > n ? s.slice(0, n - 1) + "…" : s;
+/* A control action's "action" and a feedback's "signal" hold one label or a list of labels. */
+const labelsOf = (v) => (Array.isArray(v) ? v : [v]).filter((x) => typeof x === "string" && x.trim());
+const labelText = (v) => labelsOf(v).join(" / ");
+/* Width of a label in px, measured with the page font. */
+const measureCtx = document.createElement("canvas").getContext("2d");
+function textWidth(s, px, weight = 400) {
+  const base = getComputedStyle(document.documentElement).getPropertyValue("--font").trim() || "sans-serif";
+  measureCtx.font = `${weight} ${px}px ${base}`;
+  return measureCtx.measureText(String(s ?? "")).width;
+}
+const clamp = (v, lo, hi, d) => (v === null || v === undefined || v === "" || !Number.isFinite(+v)) ? d : Math.min(hi, Math.max(lo, +v));
+/* Inline styles are needed because the CSS rules above beat SVG presentation attributes. */
+function applyStyle(el, css) { for (const k in css) if (css[k] !== undefined && css[k] !== null) el.style.setProperty(k, String(css[k])); return el; }
+
+function renderDiagram(m) {
+  const svg = $("diagram");
+  svg.replaceChildren();
+  const ctrls = (m.controllers || []).filter((c) => c && c.id);
+  const procs = (m.controlled_processes || []).filter((p) => p && p.id);
+  const cas = (m.control_actions || []).filter((x) => x && x.id);
+  const fbs = (m.feedback || []).filter((x) => x && x.id);
+  const acts = (m.actuators || []).filter((x) => x && x.id);
+  const sens = (m.sensors || []).filter((x) => x && x.id);
+
+  // Rank controllers: explicit level, else 1 + max rank of controllers commanding it.
+  const rank = new Map(ctrls.map((c) => [c.id, Number.isFinite(c.level) ? c.level : 0]));
+  for (let pass = 0; pass < ctrls.length; pass++) {
+    cas.forEach((ca) => {
+      const tgt = ctrls.find((c) => c.id === ca.target);
+      if (tgt && !Number.isFinite(tgt.level) && rank.has(ca.source)) rank.set(tgt.id, Math.max(rank.get(tgt.id), rank.get(ca.source) + 1));
+    });
+  }
+  const levels = [...new Set(rank.values())].sort((a, b) => a - b);
+  const rows = levels.map((lv) => ctrls.filter((c) => rank.get(c.id) === lv).map((c) => ({ ...c, kind: "ctrl" })));
+  // Actuators and sensors sit between the controllers and the processes, actuators first (as in the Penpot model).
+  if (acts.length || sens.length) rows.push([...acts.map((a) => ({ ...a, kind: "act" })), ...sens.map((s) => ({ ...s, kind: "sens" }))]);
+  if (procs.length) rows.push(procs.map((p) => ({ ...p, kind: "proc" })));
+
+  const NODE_W = 140, NODE_H = 56;
+  const PAD = 30;
+  const LANE = 22, CHGAP = 40, EDGE_PAD = 18, GAPX = 48, LINE_H = 13, LBL_MAX = 40;
+
+  const edgeColor = (type) => type === "ca" ? "var(--brand)" : "var(--info)";
+  const defs = svgEl("defs", {});
+  ["ca", "fb"].forEach((type) => {
+    const mk = svgEl("marker", { id: "ah-" + type, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 10, markerHeight: 10, markerUnits: "userSpaceOnUse", orient: "auto-start-reverse" });
+    mk.appendChild(applyStyle(svgEl("path", { d: "M0,0 L10,5 L0,10 z" }), { fill: edgeColor(type) }));
+    defs.appendChild(mk);
+  });
+  // Selected state: a 4 px spread halo with a 2 px blur, like the Penpot "State=Selected" variant.
+  // User-space region, because a straight line has a zero-width bounding box.
+  const halo = svgEl("filter", { id: "sel-halo", filterUnits: "userSpaceOnUse", x: -10000, y: -10000, width: 30000, height: 30000 });
+  halo.append(
+    svgEl("feMorphology", { in: "SourceAlpha", operator: "dilate", radius: 4, result: "spread" }),
+    svgEl("feGaussianBlur", { in: "spread", stdDeviation: 1, result: "blur" }),
+    applyStyle(svgEl("feFlood", { result: "colour" }), { "flood-color": "var(--shadow-sel)" }),
+    svgEl("feComposite", { in: "colour", in2: "blur", operator: "in", result: "halo" }));
+  const merge = svgEl("feMerge", {});
+  merge.append(svgEl("feMergeNode", { in: "halo" }), svgEl("feMergeNode", { in: "SourceGraphic" }));
+  halo.appendChild(merge);
+  defs.appendChild(halo);
+  svg.appendChild(defs);
+  const subOf = (n) => n.kind === "ctrl" ? `${n.id} · ${(n.process_model?.variables || []).length} PM vars`
+    : n.kind === "act" ? `${n.id} · actuator` : n.kind === "sens" ? `${n.id} · sensor` : `${n.id} · ${(n.states || []).length} states`;
+  const lblW = (s) => textWidth(s, 11);
+
+  // Nodes, one per controller / process, with the channels that leave their bottom and enter their top.
+  const nodes = new Map();
+  rows.forEach((row, r) => row.forEach((n, i) => {
+    const minW = Math.min(420, Math.max(NODE_W, textWidth(n.name || n.id, 12, 600) + 28, textWidth(subOf(n), 10.5) + 28));
+    nodes.set(n.id, { n, kind: n.kind, r, order: (i + 0.5) / row.length, h: NODE_H, minW, x: 0, y: 0, w: minW, top: [], bottom: [] });
+  }));
+
+  // Edges with the same type, source and target share one line and stack their labels.
+  const groups = new Map();
+  // Actuation (actuator → process) and measurement (process → sensor) lines are drawn from the actuator/sensor itself.
+  const actuation = acts.map((a) => ({ e: { id: a.id, source: a.id, target: a.target, action: a.actuation || "actuation", synthetic: true }, type: "ca", label: a.actuation || "actuation" }));
+  const measurement = sens.map((s) => ({ e: { id: s.id, source: s.source, target: s.id, signal: s.measures || "process feedback", synthetic: true }, type: "fb", label: s.measures || "process feedback" }));
+  const perLabel = (e, type, v) => (labelsOf(v).length ? labelsOf(v) : [e.id]).map((label) => ({ e, type, label }));
+  [...cas.flatMap((e) => perLabel(e, "ca", e.action)), ...fbs.flatMap((e) => perLabel(e, "fb", e.signal)), ...actuation, ...measurement].forEach(({ e, type, label }) => {
+    const a = nodes.get(e.source), b = nodes.get(e.target);
+    if (!a || !b || a === b) return;
+    const key = type + "|" + e.source + "|" + e.target;
+    if (!groups.has(key)) groups.set(key, { type, a, b, edges: [] });
+    groups.get(key).edges.push({ e, label: trunc(label || e.id, LBL_MAX) });
+  });
+  // Groups between two rows form a channel: control lines on the left, feedback lines on the right.
+  const channels = new Map(), flatGroups = [];
+  groups.forEach((g) => {
+    if (g.a.r === g.b.r) { flatGroups.push(g); return; }
+    const [u, l] = g.a.r < g.b.r ? [g.a, g.b] : [g.b, g.a];
+    const key = u.n.id + "|" + l.n.id;
+    if (!channels.has(key)) { const ch = { u, l, groups: [] }; channels.set(key, ch); u.bottom.push(ch); l.top.push(ch); }
+    channels.get(key).groups.push(g);
+  });
+  channels.forEach((ch) => {
+    ch.groups.sort((p, q) => (p.type === q.type ? 0 : p.type === "ca" ? -1 : 1));
+    ch.span = (ch.groups.length - 1) * LANE;
+  });
+
+  // Order each row by the mean position of the nodes above it (barycentre), so channels run straight down.
+  rows.forEach((row, r) => {
+    if (!r) return;
+    const key = (n) => { const nd = nodes.get(n.id), ups = nd.top.map((ch) => ch.u.order); return ups.length ? ups.reduce((s, v) => s + v, 0) / ups.length : nd.order; };
+    row.sort((p, q) => key(p) - key(q));
+    row.forEach((n, i) => { nodes.get(n.id).order = (i + 0.5) / row.length; });
+  });
+  // Bottom channels follow the order of their lower nodes; channels that skip a row start on the outer side.
+  channels.forEach((ch) => { ch.pre = 0; ch.side = ch.u.order < 0.5 ? -1 : 2; });
+  const bottomNeed = (nd) => nd.bottom.length ? nd.bottom.reduce((s, ch) => s + ch.pre + ch.span, 0) + (nd.bottom.length - 1) * CHGAP + 2 * EDGE_PAD : 0;
+  // Same-row neighbours get a gap wide enough for the labels of the lines between them.
+  const gapBetween = (p, q) => Math.max(GAPX, ...flatGroups.filter((g) => (g.a === p && g.b === q) || (g.a === q && g.b === p))
+    .flatMap((g) => g.edges.map((x) => lblW(x.label) + 28)));
+
+  // Place rows top-down. A node starts at the leftmost channel coming from above and is widened to cover
+  // all of them, so those lines need no elbow; a node pushed right by its neighbour would need elbows.
+  const place = () => rows.forEach((row, r) => {
+    let prev = null;
+    const rowStart = r ? Math.min(...rows[r - 1].map((n) => nodes.get(n.id).x)) : 0;
+    row.forEach((n) => {
+      const nd = nodes.get(n.id);
+      const k = (ch) => ch.l.r - nd.r > 1 ? ch.side : ch.l.order;
+      nd.bottom.sort((p, q) => k(p) - k(q));
+      const xs = nd.top.flatMap((ch) => [ch.x, ch.x + ch.span]);
+      const minX = prev ? prev.x + prev.w + gapBetween(prev, nd) : -Infinity;
+      nd.x = Math.max(xs.length ? Math.min(...xs) - EDGE_PAD : (prev ? minX : rowStart), minX);
+      const hi = xs.length ? Math.max(...xs) + EDGE_PAD : -Infinity;
+      nd.w = Math.max(nd.minW, bottomNeed(nd), hi - nd.x);
+      let cx = nd.x + (nd.w - bottomNeed(nd)) / 2 + EDGE_PAD;
+      nd.bottom.forEach((ch) => { cx += ch.pre; ch.x = cx; cx += ch.span + CHGAP; });
+      prev = nd;
+    });
+  });
+  const blockedBy = (ch) => [...nodes.values()].some((nd) => nd.r > ch.u.r && nd.r < ch.l.r && ch.x + ch.span > nd.x - 8 && ch.x < nd.x + nd.w + 8);
+  // Relax: shift a channel right (widening its upper node) until its pushed-right lower node lies under it,
+  // and move a row-skipping channel to the other side of its upper node when a node in between blocks it.
+  for (let pass = 0; pass < 8; pass++) {
+    place();
+    let changed = false;
+    channels.forEach((ch) => {
+      if (ch.l.r - ch.u.r > 1) {
+        if (blockedBy(ch) && !ch.flipped) { ch.side = ch.side < 0 ? 2 : -1; ch.flipped = changed = true; }
+      } else if (ch.x < ch.l.x + 8) { ch.pre += ch.l.x + EDGE_PAD - ch.x; changed = true; }
+    });
+    if (!changed) break;
+  }
+  place();
+
+  // Row height leaves room for the stacked labels of the busiest channel.
+  const maxStack = Math.max(1, ...[...groups.values()].map((g) => g.edges.length));
+  const ROWGAP = Math.min(240, Math.max(110, 60 + maxStack * LINE_H * 2));
+  nodes.forEach((nd) => { nd.y = nd.r * (NODE_H + ROWGAP) + (NODE_H - nd.h) / 2; });
+
+  // Orthogonal routes: straight where the channel lies inside both nodes, otherwise elbows in the gap
+  // just above the lower node; a channel that would cross a node in a skipped row runs in a side lane.
+  const routes = [];
+  const gapCount = new Map(), laneCount = { L: 0, R: 0 };
+  const bump = (k) => { const v = gapCount.get(k) || 0; gapCount.set(k, v + 1); return v; };
+  channels.forEach((ch) => {
+    const { u, l } = ch, yU = u.y + u.h, yL = l.y;
+    const between = [...nodes.values()].filter((nd) => nd.r > u.r && nd.r < l.r);
+    const tx0 = ch.x >= l.x + 8 && ch.x + ch.span <= l.x + l.w - 8 ? ch.x
+      : ch.x < l.x + 8 ? l.x + EDGE_PAD : l.x + l.w - EDGE_PAD - ch.span;
+    const blocked = between.some((nd) => ch.x + ch.span > nd.x - 8 && ch.x < nd.x + nd.w + 8);
+    let lane = null;
+    if (blocked) {
+      const lo = Math.min(...between.map((nd) => nd.x)), hi = Math.max(...between.map((nd) => nd.x + nd.w));
+      lane = ch.x - lo < hi - ch.x ? lo - 24 - laneCount.L++ * (ch.span + LANE * 2) - ch.span : hi + 24 + laneCount.R++ * (ch.span + LANE * 2);
+    }
+    const eTop = blocked ? yU + 16 + bump("t" + u.r) * 8 : null;
+    const eBot = (blocked || tx0 !== ch.x) ? yL - 16 - bump("b" + l.r) * 8 : null;
+    ch.groups.forEach((g, i) => {
+      const x = ch.x + i * LANE, tx = tx0 + i * LANE, o = i * 4;
+      let pts;
+      if (blocked) pts = [[x, yU], [x, eTop + o], [lane + i * LANE, eTop + o], [lane + i * LANE, eBot - o], [tx, eBot - o], [tx, yL]];
+      else if (tx !== x) pts = [[x, yU], [x, eBot - o], [tx, eBot - o], [tx, yL]];
+      else pts = [[x, yU], [x, yL]];
+      routes.push({ g, pts: g.a === u ? pts : pts.reverse() });
+    });
+  });
+  const flatCount = new Map();
+  flatGroups.forEach((g) => {
+    const { a, b } = g, dir = b.x > a.x ? 1 : -1;
+    const lo = Math.min(a.x, b.x), hi = Math.max(a.x, b.x);
+    const adjacent = ![...nodes.values()].some((nd) => nd.r === a.r && nd !== a && nd !== b && nd.x > lo && nd.x < hi);
+    const pairKey = [a.n.id, b.n.id].sort().join("|") + g.type;
+    const i = flatCount.get(pairKey) || 0; flatCount.set(pairKey, i + 1);
+    let pts;
+    if (adjacent) {
+      const y = a.y + a.h / 2 + (g.type === "ca" ? -8 - i * 10 : 8 + i * 10);
+      pts = [[dir > 0 ? a.x + a.w : a.x, y], [dir > 0 ? b.x : b.x + b.w, y]];
+    } else { // over the top of the nodes in between
+      const k = bump("f" + a.r), yt = Math.min(a.y, b.y) - 18 - k * 8, off = g.type === "ca" ? -EDGE_PAD : EDGE_PAD;
+      const x1 = a.x + a.w / 2 + off, x2 = b.x + b.w / 2 + off;
+      pts = [[x1, a.y], [x1, yt], [x2, yt], [x2, b.y]];
+    }
+    routes.push({ g, pts, flat: true });
+  });
+
+  // Labels: beside the longest vertical run (control on the left, feedback on the right), or above/below a
+  // horizontal line. Each label takes the first spot that hits no node, label or other line.
+  const rect = (x, y, w, h) => ({ x, y, w, h });
+  const overlaps = (p, list) => list.some((o) => p.x < o.x + o.w && p.x + p.w > o.x && p.y < o.y + o.h && p.y + p.h > o.y);
+  const nodeRects = [...nodes.values()].map((nd) => rect(nd.x - 2, nd.y - 2, nd.w + 4, nd.h + 4));
+  const lineRects = routes.flatMap((rt, ri) => rt.pts.slice(1).map((p, i) => {
+    const q = rt.pts[i];
+    return { ...rect(Math.min(p[0], q[0]) - 2, Math.min(p[1], q[1]) - 2, Math.abs(p[0] - q[0]) + 4, Math.abs(p[1] - q[1]) + 4), ri };
+  }));
+  const placed = [], labels = [];
+  const runOf = (pts) => {
+    let best = null;
+    pts.slice(1).forEach((p, i) => {
+      const q = pts[i], len = Math.abs(p[1] - q[1]);
+      if (p[0] === q[0] && (!best || len > best.len)) best = { x: p[0], y1: Math.min(p[1], q[1]), y2: Math.max(p[1], q[1]), len };
+    });
+    return best;
+  };
+  routes.map((rt, ri) => ({ rt, ri, run: rt.flat ? null : runOf(rt.pts) }))
+    .sort((p, q) => (p.run ? p.run.len : 0) - (q.run ? q.run.len : 0))
+    .forEach(({ rt, ri, run }) => {
+      const type = rt.g.type, others = lineRects.filter((lr) => lr.ri !== ri);
+      rt.g.edges.forEach(({ e, label }) => {
+        const w = lblW(label), h = LINE_H;
+        const cands = [];
+        if (run) {
+          const mid = (run.y1 + run.y2) / 2, sides = type === "ca" ? [-1, 1] : [1, -1];
+          for (const side of sides) for (let s = 0; s * LINE_H < run.len / 2; s++) for (const sg of s ? [1, -1] : [1]) {
+            const by = mid + 4 + sg * s * LINE_H;
+            if (by - h < run.y1 + 2 || by > run.y2 - 2) continue;
+            cands.push(rect(side < 0 ? run.x - 6 - w : run.x + 6, by - h + 3, w, h));
+          }
+        } else {
+          const [p, q] = rt.pts.length === 2 ? rt.pts : [rt.pts[1], rt.pts[2]];
+          const mx = (p[0] + q[0]) / 2, y = p[1], sg = type === "ca" ? -1 : 1;
+          for (let s = 0; s < 6; s++) for (const dx of [0, -w / 2, w / 2]) cands.push(rect(mx - w / 2 + dx, sg < 0 ? y - 4 - h - s * LINE_H : y + 4 + s * LINE_H, w, h));
+        }
+        const pick = cands.find((c) => !overlaps(c, nodeRects) && !overlaps(c, placed) && !overlaps(c, others))
+          || cands.find((c) => !overlaps(c, nodeRects) && !overlaps(c, placed)) || cands[0]
+          || rect((rt.pts[0][0] + rt.pts[rt.pts.length - 1][0]) / 2, (rt.pts[0][1] + rt.pts[rt.pts.length - 1][1]) / 2, w, h);
+        placed.push(pick);
+        labels.push({ type, label, e, r: pick });
+      });
+    });
+
+  // Fit the viewBox (and the Group Identity Frame, when linked) around everything that was laid out.
+  const allX = [...nodeRects.flatMap((b) => [b.x, b.x + b.w]), ...routes.flatMap((rt) => rt.pts.map((p) => p[0])), ...placed.flatMap((b) => [b.x, b.x + b.w])];
+  const allY = [...nodeRects.flatMap((b) => [b.y, b.y + b.h]), ...routes.flatMap((rt) => rt.pts.map((p) => p[1])), ...placed.flatMap((b) => [b.y, b.y + b.h])];
+  const minX = Math.min(0, ...allX), maxX = Math.max(0, ...allX), minY = Math.min(0, ...allY), maxY = Math.max(0, ...allY);
+  const width = Math.max(560, Math.ceil(maxX - minX + PAD * 2)), height = Math.ceil(maxY - minY + PAD * 2);
+  const offX = (width - (maxX - minX)) / 2 - minX, offY = PAD - minY;
+  svg.setAttribute("width", width); svg.setAttribute("height", height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  const root = svgEl("g", { transform: `translate(${offX},${offY})` });
+  svg.appendChild(root);
+
+  const edgeLayer = svgEl("g", {}), labelLayer = svgEl("g", {}), nodeLayer = svgEl("g", {});
+  // data-id / data-ids mark control actions for the safety-case trace highlight; data-sel marks what Shift+click selects.
+  routes.forEach(({ g, pts }) => {
+    const attrs = { d: "M" + pts.map((p) => p.join(",")).join(" L"), class: g.type, "marker-end": `url(#ah-${g.type})` };
+    const synthetic = g.edges[0].e.synthetic;
+    const edgeIds = [...new Set(g.edges.map(({ e }) => e.id))];
+    if (!synthetic) attrs["data-sel"] = edgeIds.join(",");
+    if (g.type === "ca" && !synthetic) attrs["data-ids"] = attrs["data-sel"];
+    const path = svgEl("path", attrs);
+    path.appendChild(svgEl("title", {}, synthetic
+      ? `${g.type === "ca" ? "Actuation" : "Process feedback"}: ${g.edges[0].label} (${g.edges[0].e.source} → ${g.edges[0].e.target})`
+      : edgeIds.map((id) => g.edges.find(({ e }) => e.id === id).e).map((e) => `${e.id}: ${labelText(g.type === "ca" ? e.action : e.signal)} (${e.source} → ${e.target})`).join("\n")
+        + "\nClick to edit, Shift+click to select"));
+    if (g.type === "ca" && !synthetic) path.addEventListener("click", (ev) => { if (!ev.shiftKey) setFocus(g.edges[0].e.id); });
+    edgeLayer.appendChild(path);
+  });
+  labels.forEach(({ type, label, e, r }) => {
+    const attrs = { x: r.x, y: r.y + r.h - 3, class: "lbl-" + type };
+    if (!e.synthetic) attrs["data-sel"] = e.id;
+    if (type === "ca" && !e.synthetic) attrs["data-id"] = e.id;
+    const lbl = svgEl("text", attrs, label);
+    lbl.appendChild(svgEl("title", {}, e.synthetic ? label : `${e.id}: ${labelText(type === "ca" ? e.action : e.signal)}\nClick to edit, Shift+click to select`));
+    if (type === "ca" && !e.synthetic) lbl.addEventListener("click", (ev) => { if (!ev.shiftKey) setFocus(e.id); });
+    labelLayer.appendChild(lbl);
+  });
+  nodes.forEach(({ x, y, w, h, n }) => {
+    const g = svgEl("g", { class: "node " + n.kind, transform: `translate(${x},${y})`, "data-sel": n.id });
+    g.appendChild(svgEl("rect", { width: w, height: h, rx: n.kind === "ctrl" ? 6 : n.kind === "proc" ? 2 : 0 }));
+    const chars = Math.max(10, Math.floor((w - 16) / 6.5));
+    g.appendChild(svgEl("text", { x: w / 2, y: h / 2 - 5, "text-anchor": "middle", "font-weight": 600 }, trunc(n.name || n.id, chars)));
+    g.appendChild(svgEl("text", { x: w / 2, y: h / 2 + 13, "text-anchor": "middle", class: "sub" }, subOf(n)));
+    g.appendChild(svgEl("title", {}, (n.kind === "ctrl"
+      ? `${n.name}\nVariables: ${(n.process_model?.variables || []).join(", ")}\nAssumptions: ${(n.process_model?.assumptions || []).join("; ")}`
+      : n.kind === "act" ? `${n.name}\nActuates ${n.target}${n.actuation ? ": " + n.actuation : ""}`
+      : n.kind === "sens" ? `${n.name}\nMeasures ${n.source}${n.measures ? ": " + n.measures : ""}`
+      : `${n.name}\nStates: ${(n.states || []).join(", ")}`) + "\nClick to edit, Shift+click to select"));
+    nodeLayer.appendChild(g);
+  });
+  root.append(edgeLayer, nodeLayer, labelLayer);
+  $("counts").textContent = `${ctrls.length} controllers · ${procs.length} processes · ${cas.length} CAs · ${fbs.length} feedback`
+    + (acts.length ? ` · ${acts.length} actuators` : "") + (sens.length ? ` · ${sens.length} sensors` : "");
+  applySelection();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3a. Selection — Shift+click a process block (controller, process, actuator,
+   sensor), control action or feedback to add or remove it. The selection scopes
+   the analysis (see scopePreamble) and drives the actuator/sensor conversions.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const SEL_KINDS = { controllers: "Controller", controlled_processes: "Process", actuators: "Actuator", sensors: "Sensor", control_actions: "Control action", feedback: "Feedback" };
+let selection = new Set(store.get("selection", []));
+
+/** Each selected element with its section and the model object it refers to, in selection order. */
+function selectedItems(m = currentModel) {
+  if (!m) return [];
+  const byId = new Map();
+  for (const k in SEL_KINDS) (Array.isArray(m[k]) ? m[k] : []).forEach((x) => { if (x && x.id) byId.set(x.id, { kind: k, obj: x }); });
+  return [...selection].filter((id) => byId.has(id)).map((id) => ({ id, ...byId.get(id) }));
+}
+function setSelection(ids) {
+  selection = new Set(ids);
+  store.set("selection", [...selection]);
+  applySelection();
+}
+function toggleSelected(ids) {
+  const next = new Set(selection), on = ids.some((id) => !next.has(id));
+  ids.forEach((id) => (on ? next.add(id) : next.delete(id)));
+  setSelection(next);
+}
+const itemLabel = ({ kind, obj }) => obj.name || labelText(kind === "control_actions" ? obj.action : obj.signal) || obj.id;
+
+function applySelection() {
+  document.querySelectorAll("#diagram [data-sel]").forEach((el) => {
+    el.classList.toggle("sel", el.dataset.sel.split(",").some((id) => selection.has(id)));
+    el.classList.toggle("editing", !!editingId && el.dataset.sel.split(",").includes(editingId));
+  });
+  const items = selectedItems(), bar = $("selBar");
+  bar.replaceChildren();
+  const btn = (text, title, onClick, disabled) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = text; b.title = title; b.disabled = !!disabled;
+    b.addEventListener("click", onClick);
+    return b;
+  };
+  if (!items.length) {
+    bar.textContent = "Shift+click blocks, control actions or feedback to select them and scope the analysis.";
+  } else {
+    bar.append(`Selected (${items.length}):`);
+    items.forEach((it) => {
+      const chip = document.createElement("span");
+      chip.className = "selchip";
+      chip.title = `${SEL_KINDS[it.kind]} ${it.id}`;
+      chip.append(`${it.id} · ${trunc(itemLabel(it), 28)}`);
+      const x = btn("✕", `Remove ${it.id} from the selection`, () => toggleSelected([it.id]));
+      x.setAttribute("aria-label", `Remove ${it.id} from the selection`);
+      chip.appendChild(x);
+      bar.appendChild(chip);
+    });
+    const procIds = new Set((currentModel.controlled_processes || []).map((p) => p && p.id));
+    const caOk = items.filter((it) => it.kind === "control_actions" && procIds.has(it.obj.target));
+    const fbOk = items.filter((it) => it.kind === "feedback" && procIds.has(it.obj.source));
+    const blocks = items.filter((it) => it.kind in BLOCK_KINDS);
+    const sw = document.createElement("select");
+    sw.title = "Change the type of the selected process blocks; their ids, names and links stay";
+    sw.setAttribute("aria-label", "Switch the selected blocks to another type");
+    sw.disabled = !blocks.length;
+    sw.appendChild(new Option("Switch to…", ""));
+    for (const k in BLOCK_KINDS) sw.appendChild(new Option(BLOCK_KINDS[k].toLowerCase(), k));
+    sw.addEventListener("change", () => { if (sw.value) switchSelected(sw.value); });
+    bar.append(
+      btn("Convert to actuator", "Insert an actuator between each selected control action and the process it acts on", () => convertSelected("actuator"), !caOk.length),
+      btn("Convert to sensor", "Insert a sensor between the process and each selected feedback", () => convertSelected("sensor"), !fbOk.length),
+      sw,
+      btn("Clear", "Clear the selection (analyse the whole structure)", () => setSelection([])));
+  }
+}
+
+$("diagram").addEventListener("click", (e) => {
+  const el = e.target.closest("[data-sel]");
+  if (!el) return;
+  const ids = el.dataset.sel.split(",");
+  if (e.shiftKey) toggleSelected(ids);
+  if (!e.shiftKey || selection.has(ids[0])) focusRow(ids[0]);
+});
+
+/* Conversions prepare for a deeper level of analysis: a control action that ends at a controlled process
+   gets an actuator in between (controller → actuator → process), and feedback that starts at a process
+   gets a sensor (process → sensor → controller). The control-action/feedback ids stay, so UCAs keep pointing at them. */
+function nextId(m, prefix) {
+  const used = new Set();
+  for (const k in m) if (Array.isArray(m[k])) m[k].forEach((x) => x && x.id && used.add(x.id));
+  let n = 1; while (used.has(prefix + n)) n++;
+  return prefix + n;
+}
+function convertSelected(to) {
+  const m = structuredClone(currentModel), done = [], next = new Set(selection);
+  const procIds = new Set((m.controlled_processes || []).map((p) => p && p.id));
+  selectedItems(m).forEach(({ kind, obj }) => {
+    if (to === "actuator" && kind === "control_actions" && procIds.has(obj.target)) {
+      const id = nextId(m, "a");
+      (m.actuators ||= []).push({ id, name: `${labelText(obj.action) || obj.id} actuator`, target: obj.target, actuation: "", converted_from: obj.id });
+      obj.target = id;
+      next.delete(obj.id); next.add(id); done.push(`${obj.id} → actuator ${id}`);
+    }
+    if (to === "sensor" && kind === "feedback" && procIds.has(obj.source)) {
+      const id = nextId(m, "s");
+      (m.sensors ||= []).push({ id, name: `${labelText(obj.signal) || obj.id} sensor`, source: obj.source, measures: "", converted_from: obj.id });
+      obj.source = id;
+      next.delete(obj.id); next.add(id); done.push(`${obj.id} → sensor ${id}`);
+    }
+  });
+  if (!done.length) return;
+  replaceEditor(m);
+  setSelection(next);
+  setStatus(`Converted ${done.join(", ")}. Ctrl/⌘+Z in the editor undoes it.`);
+}
+
+/* Switching changes a process block's type (controller, controlled process, actuator, sensor) and keeps its id,
+   name and links. Fields that only the old type has are kept under "switched_from" and come back when the
+   block is switched back, so an actuator can become a controlled process and later an actuator again. */
+const BLOCK_KINDS = { controllers: "Controller", controlled_processes: "Controlled process", actuators: "Actuator", sensors: "Sensor" };
+const TYPE_FIELDS = { controllers: ["level", "process_model"], controlled_processes: ["states"],
+  actuators: ["target", "actuation", "converted_from"], sensors: ["source", "measures", "converted_from"] };
+const blockKindOf = (m, id) => Object.keys(BLOCK_KINDS).find((k) => Array.isArray(m[k]) && m[k].some((x) => x && x.id === id));
+function switchBlock(m, id, to) {
+  const from = blockKindOf(m, id);
+  if (!from || from === to) return false;
+  const i = m[from].findIndex((x) => x && x.id === id);
+  const { switched_from: prev, ...obj } = m[from][i], saved = {};
+  m[from].splice(i, 1);
+  if (!m[from].length) delete m[from];
+  const empty = (v) => v === "" || v === null || (Array.isArray(v) ? !v.length : typeof v === "object" && Object.values(v).every(empty));
+  TYPE_FIELDS[from].forEach((f) => { if (f in obj) { if (!empty(obj[f])) saved[f] = obj[f]; delete obj[f]; } });
+  const firstProc = (m.controlled_processes || []).find((p) => p && p.id && p.id !== id)?.id || "";
+  const defaults = { controllers: { process_model: { variables: [], assumptions: [] } }, controlled_processes: { states: [] },
+    actuators: { target: firstProc, actuation: "" }, sensors: { source: firstProc, measures: "" } }[to];
+  const restored = prev && prev.section === to ? (({ section, ...rest }) => rest)(prev) : {};
+  const next = { ...obj, ...defaults, ...restored };
+  if (Object.keys(saved).length) next.switched_from = { section: from, ...saved };
+  (m[to] ||= []).push(next);
+  return true;
+}
+function switchSelected(to) {
+  const m = structuredClone(currentModel);
+  const done = selectedItems(m).filter((it) => it.kind in BLOCK_KINDS && switchBlock(m, it.id, to)).map((it) => it.id);
+  if (!done.length) { applySelection(); return; }
+  replaceEditor(m);
+  setStatus(`Switched ${done.join(", ")} to ${BLOCK_KINDS[to].toLowerCase()}. Undo reverts it.`);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3b. Safety-case tables — losses, hazards, UCAs, safety constraints
+   Read-only tables generated from the model, in collapsible <details> sections.
+   Clicking a row or an id "chip" focuses that id and highlights everything
+   reachable from it over an undirected graph built from the reference arrays
+   (hazard→loss, constraint→hazard, uca→hazard, uca→control_action) — both in
+   these tables and on the matching control-action line in the diagram above.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const UCA_TYPE_LABELS = {
+  not_provided: "Not provided", provided_unsafe: "Provided (unsafe)",
+  wrong_timing: "Wrong timing / order", wrong_duration: "Wrong duration",
+};
+
+/* Directed: fwd[child] = the ids that child references ("traces up to"); bwd[parent] = the ids
+   that reference parent ("traces down to"). Kept directed (rather than one undirected graph) so
+   that two siblings which merely reference the same ancestor — e.g. two hazards tracing to the
+   same top-level loss — don't pull each other's whole chain into the highlight. */
+function buildLinkGraph(m) {
+  const fwd = new Map(), bwd = new Map();
+  const link = (child, parent) => {
+    if (!child || !parent) return;
+    if (!fwd.has(child)) fwd.set(child, new Set());
+    fwd.get(child).add(parent);
+    if (!bwd.has(parent)) bwd.set(parent, new Set());
+    bwd.get(parent).add(child);
+  };
+  (m.hazards || []).forEach((h) => h && h.id && (h.losses || []).forEach((l) => link(h.id, l)));
+  (m.constraints || []).forEach((c) => c && c.id && (c.hazards || []).forEach((h) => link(c.id, h)));
+  (m.ucas || []).forEach((u) => { if (!u || !u.id) return; (u.hazards || []).forEach((h) => link(u.id, h)); if (u.control_action) link(u.id, u.control_action); });
+  return { fwd, bwd };
+}
+function closure(map, start) {
+  const seen = new Set([start]), queue = [start];
+  while (queue.length) {
+    const cur = queue.shift();
+    (map.get(cur) || []).forEach((n) => { if (!seen.has(n)) { seen.add(n); queue.push(n); } });
+  }
+  return seen;
+}
+/* What `start` traces up to (its ancestors) union what traces down to it (its descendants) —
+   not a full undirected BFS, so unrelated siblings sharing a distant ancestor stay unhighlighted. */
+function connectedSet(graph, start) {
+  const up = closure(graph.fwd, start), down = closure(graph.bwd, start);
+  return new Set([...up, ...down]);
+}
+
+let linkGraph = { fwd: new Map(), bwd: new Map() }, focusId = null;
+
+function chipList(items) {
+  const span = document.createElement("span");
+  items.forEach((it) => {
+    const chip = document.createElement("span");
+    chip.className = "chip"; chip.textContent = it.label ?? it.id; chip.dataset.id = it.id;
+    chip.addEventListener("click", (e) => { e.stopPropagation(); setFocus(it.id); });
+    span.appendChild(chip);
+  });
+  return span;
+}
+function buildScTable(tbodyId, rows, cols) {
+  const tbody = $(tbodyId); tbody.replaceChildren();
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    tr.dataset.id = row.id;
+    tr.addEventListener("click", () => setFocus(row.id));
+    cols.forEach((render) => { const td = document.createElement("td"); render(td, row); tr.appendChild(td); });
+    tbody.appendChild(tr);
+  });
+}
+
+function renderSafetyCase(m) {
+  linkGraph = buildLinkGraph(m);
+  focusId = null;
+  const losses = (m.losses || []).filter((x) => x && x.id);
+  const hazards = (m.hazards || []).filter((x) => x && x.id);
+  const constraints = (m.constraints || []).filter((x) => x && x.id);
+  const ucas = (m.ucas || []).filter((x) => x && x.id);
+  const caLabel = (id) => { const ca = (m.control_actions || []).find((c) => c && c.id === id); return ca ? `${labelText(ca.action) || ca.id} (${id})` : id; };
+
+  $("scLossesCount").textContent = losses.length;
+  buildScTable("scLossesBody", losses, [
+    (td, r) => { td.textContent = r.id; },
+    (td, r) => { td.textContent = r.description || ""; },
+  ]);
+
+  $("scHazardsCount").textContent = hazards.length;
+  buildScTable("scHazardsBody", hazards, [
+    (td, r) => { td.textContent = r.id; },
+    (td, r) => { td.textContent = r.description || ""; },
+    (td, r) => { td.appendChild(chipList((r.losses || []).map((id) => ({ id })))); },
+  ]);
+
+  $("scUcasCount").textContent = ucas.length;
+  buildScTable("scUcasBody", ucas, [
+    (td, r) => { td.textContent = r.id; },
+    (td, r) => { td.textContent = UCA_TYPE_LABELS[r.type] || r.type || ""; },
+    (td, r) => { if (r.control_action) td.appendChild(chipList([{ id: r.control_action, label: caLabel(r.control_action) }])); },
+    (td, r) => { td.textContent = r.context || ""; },
+    (td, r) => { td.appendChild(chipList((r.hazards || []).map((id) => ({ id })))); },
+  ]);
+
+  $("scConstraintsCount").textContent = constraints.length;
+  buildScTable("scConstraintsBody", constraints, [
+    (td, r) => { td.textContent = r.id; },
+    (td, r) => { td.textContent = r.description || ""; },
+    (td, r) => { td.appendChild(chipList((r.hazards || []).map((id) => ({ id })))); },
+  ]);
+
+  applyFocus();
+}
+
+function setFocus(id) { focusId = focusId === id ? null : id; applyFocus(); }
+function applyFocus() {
+  const connected = focusId ? connectedSet(linkGraph, focusId) : null;
+  document.querySelectorAll("#safetyCaseWrap tr[data-id]").forEach((tr) => {
+    tr.classList.toggle("hl", !!connected && connected.has(tr.dataset.id));
+    tr.classList.toggle("dim", !!connected && !connected.has(tr.dataset.id));
+  });
+  document.querySelectorAll("#safetyCaseWrap .chip").forEach((chip) => {
+    chip.classList.toggle("hl", !!connected && connected.has(chip.dataset.id));
+  });
+  document.querySelectorAll("#diagram [data-id]").forEach((el) => {
+    el.style.opacity = !connected ? "" : connected.has(el.dataset.id) ? "1" : ".3";
+  });
+  document.querySelectorAll("#diagram [data-ids]").forEach((el) => {
+    const on = connected && el.dataset.ids.split(",").some((x) => connected.has(x));
+    el.style.opacity = !connected ? "" : on ? "1" : ".3";
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3c. Structure tables — process blocks, control actions and feedback as rows
+   of fields. They show the last structure that parsed (validation errors are
+   allowed, so a half-finished change can be completed here). Each change is
+   written to the JSON with replaceEditor, so Undo / Ctrl+Z reverts it.
+   Clicking an element in the diagram opens and focuses its row.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const ID_PREFIX = { controllers: "c", controlled_processes: "p", actuators: "a", sensors: "s", control_actions: "ca", feedback: "fb" };
+const asList = (v) => Array.isArray(v) ? v : (v === undefined || v === null || v === "" ? [] : [v]);
+const splitLines = (text) => text.split("\n").map((x) => x.trim()).filter(Boolean);
+let editingId = null;   // id of the row whose fields have focus; its diagram element is highlighted
+
+/** Apply `mutate` to a copy of the parsed JSON and write it back; focus returns to the field with key `focusKey`. */
+function editStructure(mutate, msg, focusKey) {
+  const { model } = parseModel($("editor").value);
+  if (!model || typeof model !== "object" || Array.isArray(model)) { setStatus("Fix the JSON syntax first: the tables edit the parsed structure."); return; }
+  const m = structuredClone(model);
+  if (mutate(m) === false) return;
+  const active = document.activeElement, key = focusKey || active?.dataset?.key;
+  const range = !focusKey && typeof active?.selectionStart === "number" ? [active.selectionStart, active.selectionEnd] : null;
+  replaceEditor(m);
+  const el = key && document.querySelector(`#structureWrap [data-key="${CSS.escape(key)}"]`);
+  if (el) { el.focus({ preventScroll: true }); if (range) el.setSelectionRange(...range); }
+  if (msg) setStatus(msg + " Undo reverts it.");
+}
+/** (m) => fn(item, m) for the element `id` in section `k`; false (no change) when it is gone. */
+const withItem = (k, id, fn) => (m) => { const x = (Array.isArray(m[k]) ? m[k] : []).find((e) => e && e.id === id); return x ? fn(x, m) : false; };
+
+function stInput(key, value, onValue, { label, ...attrs } = {}) {
+  const el = Object.assign(document.createElement("input"), { type: "text", value: value ?? "", ...attrs });
+  el.dataset.key = key;
+  if (label) el.setAttribute("aria-label", label);
+  // Commit after the browser has moved focus (Tab), so the re-rendered table can put it back in the right field.
+  el.addEventListener("change", () => setTimeout(() => editStructure((m) => onValue(m, el.value)), 0));
+  return el;
+}
+function stLines(key, values, onValue, placeholder) {
+  const el = Object.assign(document.createElement("textarea"), { value: asList(values).join("\n"), placeholder, rows: Math.max(1, asList(values).length) });
+  el.dataset.key = key;
+  el.addEventListener("change", () => setTimeout(() => editStructure((m) => onValue(m, splitLines(el.value))), 0));
+  return el;
+}
+function stSelect(key, options, value, onValue, label) {
+  const el = document.createElement("select");
+  el.dataset.key = key;
+  el.setAttribute("aria-label", label);
+  options.forEach(([v, text]) => el.appendChild(new Option(text, v)));
+  if (!options.some(([v]) => v === value)) el.appendChild(new Option(value ? `${value} (missing)` : "—", value ?? ""));
+  el.value = value ?? "";
+  el.addEventListener("change", () => setTimeout(() => editStructure((m) => onValue(m, el.value)), 0));
+  return el;
+}
+const fld = (label, el) => { const l = document.createElement("label"); l.className = "fld"; l.append(label, el); return l; };
+
+function renderStructure(m) {
+  if (!m || typeof m !== "object" || Array.isArray(m)) return;
+  const list = (k) => (Array.isArray(m[k]) ? m[k] : []).filter((x) => x && typeof x === "object" && x.id);
+  const blocks = Object.keys(BLOCK_KINDS).flatMap((k) => list(k).map((obj) => ({ k, obj })));
+  const nodeName = ({ obj }) => `${obj.id} · ${trunc(obj.name || "", 24)}`;
+  const opts = (pred) => blocks.filter(pred).map((b) => [b.obj.id, nodeName(b)]);
+  const ctrlOpts = opts((b) => b.k === "controllers"), procOpts = opts((b) => b.k === "controlled_processes"), anyOpts = opts(() => true);
+  const del = (title, onClick) => { const b = document.createElement("button"); b.type = "button"; b.className = "del"; b.textContent = "✕"; b.title = title; b.setAttribute("aria-label", title); b.addEventListener("click", onClick); return b; };
+  const row = (id, cells) => {
+    const tr = document.createElement("tr");
+    tr.dataset.row = id;
+    cells.forEach((c, i) => { const td = document.createElement("td"); if (!i) { td.className = "idc"; td.textContent = id; } else td.append(...[].concat(c)); tr.appendChild(td); });
+    tr.classList.toggle("cur", id === editingId);
+    return tr;
+  };
+
+  $("stBlocksCount").textContent = blocks.length;
+  $("stBlocksBody").replaceChildren(...blocks.map(({ k, obj }) => {
+    const id = obj.id, set = (f) => (m2, v) => withItem(k, id, (x) => { if ((x[f] ?? "") === v) return false; x[f] = v; })(m2);
+    const type = stSelect(id + "|type", Object.entries(BLOCK_KINDS), k, (m2, v) => switchBlock(m2, id, v), `Type of ${id}`);
+    const name = stInput(id + "|name", obj.name, set("name"), { placeholder: "Name", label: `Name of ${id}` });
+    name.dataset.focus = "";
+    const lines = (f, label, get, put) => fld(label, stLines(`${id}|${f}`, get(obj), (m2, v) => withItem(k, id, (x) => {
+      if (JSON.stringify(asList(get(x))) === JSON.stringify(v)) return false; put(x, v);
+    })(m2)));
+    const pm = (f) => [(x) => x.process_model?.[f], (x, v) => { x.process_model = { ...(x.process_model || {}), [f]: v }; }];
+    const details = k === "controllers" ? [lines("vars", "Process-model variables", ...pm("variables")), lines("assumptions", "Assumptions", ...pm("assumptions"))]
+      : k === "controlled_processes" ? [lines("states", "States", (x) => x.states, (x, v) => { x.states = v; })]
+      : k === "actuators" ? [fld("Acts on", stSelect(id + "|target", procOpts, obj.target, set("target"), `Process ${id} acts on`)),
+          fld("Actuation", stInput(id + "|actuation", obj.actuation, set("actuation"), { label: `Actuation of ${id}` }))]
+      : [fld("Measures process", stSelect(id + "|source", procOpts, obj.source, set("source"), `Process ${id} measures`)),
+          fld("Measures", stInput(id + "|measures", obj.measures, set("measures"), { label: `What ${id} measures` }))];
+    return row(id, [null, type, name, details, del(`Delete ${id} and its control actions and feedback`, () => deleteElement(id))]);
+  }));
+
+  const linkRows = (k, labelKey, fromOpts, toOpts) => list(k).map((obj) => {
+    const id = obj.id, set = (f) => (m2, v) => withItem(k, id, (x) => { if ((x[f] ?? "") === v) return false; x[f] = v; })(m2);
+    const labels = stLines(`${id}|labels`, labelsOf(obj[labelKey]), (m2, v) => withItem(k, id, (x) => {
+      if (JSON.stringify(labelsOf(x[labelKey])) === JSON.stringify(v)) return false;
+      x[labelKey] = v.length === 1 ? v[0] : v.length ? v : "";
+    })(m2), "One label per line");
+    labels.dataset.focus = "";
+    labels.setAttribute("aria-label", `Labels of ${id}`);
+    const cells = [null, stSelect(id + "|source", fromOpts, obj.source, set("source"), `${id} from`), stSelect(id + "|target", toOpts, obj.target, set("target"), `${id} to`), labels];
+    if (k === "feedback") cells.push(stInput(id + "|latency", obj.latency_tolerance_ms, (m2, v) => withItem(k, id, (x) => {
+      const n = v.trim() === "" ? undefined : Number(v);
+      if (n === x.latency_tolerance_ms) return false;
+      if (n === undefined) delete x.latency_tolerance_ms; else x.latency_tolerance_ms = Number.isFinite(n) ? n : v;
+    })(m2), { inputMode: "numeric", label: `Latency tolerance of ${id} in ms` }));
+    cells.push(del(`Delete ${id}`, () => deleteElement(id)));
+    return row(id, cells);
+  });
+  $("stCasCount").textContent = list("control_actions").length;
+  $("stCasBody").replaceChildren(...linkRows("control_actions", "action", ctrlOpts, anyOpts));
+  $("stFbsCount").textContent = list("feedback").length;
+  $("stFbsBody").replaceChildren(...linkRows("feedback", "signal", anyOpts, ctrlOpts));
+
+  const addBtn = (text, title, onClick) => { const b = document.createElement("button"); b.type = "button"; b.textContent = text; b.title = title; b.addEventListener("click", onClick); return b; };
+  $("stBlocksAdd").replaceChildren(...Object.entries(BLOCK_KINDS).map(([k, label]) => addBtn(`+ ${label}`, `Add a ${label.toLowerCase()}`, () => addElement(k))));
+  $("stCasAdd").replaceChildren(addBtn("+ Control action", "Add a control action from the selected (or first) controller", () => addElement("control_actions")));
+  $("stFbsAdd").replaceChildren(addBtn("+ Feedback", "Add feedback to the selected (or first) controller", () => addElement("feedback")));
+}
+
+/** Add an element; links start at the selected blocks when there are any, else at the first fitting block. */
+function addElement(k) {
+  let newId;
+  editStructure((m) => {
+    newId = nextId(m, ID_PREFIX[k]);
+    const ids = (kk) => (Array.isArray(m[kk]) ? m[kk] : []).filter((x) => x && x.id).map((x) => x.id);
+    const pick = (cands) => cands.find((id) => selection.has(id)) || cands[0] || "";
+    const ctrls = ids("controllers"), procs = ids("controlled_processes"), others = [...procs, ...ids("actuators"), ...ids("sensors")];
+    const item = k === "controllers" ? { id: newId, name: "", process_model: { variables: [], assumptions: [] } }
+      : k === "controlled_processes" ? { id: newId, name: "", states: [] }
+      : k === "actuators" ? { id: newId, name: "", target: pick(procs), actuation: "" }
+      : k === "sensors" ? { id: newId, name: "", source: pick(procs), measures: "" }
+      : k === "control_actions" ? { id: newId, source: pick(ctrls), target: pick(others) || ctrls.find((c) => c !== pick(ctrls)) || "", action: "" }
+      : { id: newId, source: pick(others), target: pick(ctrls), signal: "" };
+    (Array.isArray(m[k]) ? m[k] : (m[k] = [])).push(item);
+  }, null, null);
+  if (!newId) return;
+  focusRow(newId);
+  setStatus(`Added ${newId}. Undo reverts it.`);
+}
+/** Delete an element; deleting a block also deletes the control actions and feedback that start or end at it. */
+function deleteElement(id) {
+  let removed = [];
+  editStructure((m) => {
+    const links = new Set([id]);
+    ["control_actions", "feedback"].forEach((k) => (Array.isArray(m[k]) ? m[k] : []).forEach((x) => { if (x && (x.source === id || x.target === id)) links.add(x.id); }));
+    STRUCT_KEYS.forEach((k) => {
+      if (!Array.isArray(m[k])) return;
+      removed.push(...m[k].filter((x) => x && links.has(x.id)).map((x) => x.id));
+      m[k] = m[k].filter((x) => !(x && links.has(x.id)));
+    });
+    if (!removed.length) return false;
+  });
+  if (removed.length) setStatus(`Deleted ${removed.join(", ")}. Undo reverts it.`);
+}
+
+/** Open the row of `id` (expanding its view and table), scroll to it and focus its name or labels field. */
+function focusRow(id) {
+  const tr = document.querySelector(`#structureWrap tr[data-row="${CSS.escape(id)}"]`);
+  if (!tr) return;
+  if (viewState.vStructure?.compressed) setView("vStructure", { compressed: false });
+  tr.closest("details").open = true;
+  tr.scrollIntoView({ block: "nearest" });
+  (tr.querySelector("[data-focus]") || tr.querySelector("input, select, textarea"))?.focus({ preventScroll: true });
+}
+function markEditing(id) {
+  editingId = id;
+  document.querySelectorAll("#structureWrap tr[data-row]").forEach((tr) => tr.classList.toggle("cur", tr.dataset.row === id));
+  document.querySelectorAll("#diagram [data-sel]").forEach((el) => el.classList.toggle("editing", !!id && el.dataset.sel.split(",").includes(id)));
+}
+$("structureWrap").addEventListener("focusin", (e) => markEditing(e.target.closest("tr[data-row]")?.dataset.row || null));
+$("structureWrap").addEventListener("focusout", (e) => { if (!e.relatedTarget || !$("structureWrap").contains(e.relatedTarget)) markEditing(null); });
+
+/* ── Views and panels ─────────────────────────────────────────────────────
+   Every view (JSON, diagram, structure tables, safety case) can be compressed to its bar or expanded to take
+   the free height. The two panels share the width; the splitter or the panels' Expand/Compress buttons move it
+   in steps (¼ ⅓ ½ ⅔ ¾), so the control structure can take ⅔ or ¾ with the analysis still in view. */
+const VIEW_IDS = ["vJson", "vDiagram", "vStructure", "vSafety"];
+let viewState = store.get("views", {}) || {};
+
+function setView(id, patch) {
+  const st = { ...viewState[id], ...patch };
+  if (patch.expanded) st.compressed = false;
+  if (patch.compressed) st.expanded = false;
+  viewState = { ...viewState, [id]: st };
+  store.set("views", viewState);
+  applyViews();
+}
+function applyViews() {
+  VIEW_IDS.forEach((id) => {
+    const v = $(id), st = viewState[id] || {};
+    v.classList.toggle("compressed", !!st.compressed);
+    v.classList.toggle("expanded", !!st.expanded);
+    v.querySelector(".vtitle").setAttribute("aria-expanded", String(!st.compressed));
+    v.querySelector(".vcomp").setAttribute("aria-pressed", String(!!st.compressed));
+    v.querySelector(".vexp").setAttribute("aria-pressed", String(!!st.expanded));
+  });
+}
+VIEW_IDS.forEach((id) => {
+  const bar = $(id).querySelector(".vbar"), name = bar.querySelector(".vtitle").textContent;
+  const mk = (cls, text, title, onClick) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = cls; b.textContent = text; b.title = title;
+    b.addEventListener("click", onClick);
+    bar.appendChild(b);
+  };
+  bar.querySelector(".vtitle").title = `Compress or show ${name}`;
+  bar.querySelector(".vtitle").addEventListener("click", () => setView(id, { compressed: !viewState[id]?.compressed }));
+  mk("vcomp", "Compress", `Compress ${name} to its bar (press again to show it)`, () => setView(id, { compressed: !viewState[id]?.compressed }));
+  mk("vexp", "Expand", `Let ${name} take the free height (press again to restore)`, () => setView(id, { expanded: !viewState[id]?.expanded }));
+});
+
+$("undoBtn").addEventListener("click", () => {
+  const ed = $("editor");
+  ed.focus({ preventScroll: true });
+  if (document.execCommand("undo")) { clearTimeout(editTimer); refreshEditor(); }
+});
+
+/* ── Editor wiring ───────────────────────────────────────────────────────── */
+let currentModel = null;      // last structure that parsed without errors
+let lastValidation = { errors: [], warnings: [] };
+
+function refreshEditor() {
+  const text = $("editor").value;
+  store.set("structure", text);
+  const issues = $("issues");
+  issues.replaceChildren();
+  const add = (cls, msg) => { const d = document.createElement("div"); d.className = cls; d.textContent = msg; issues.appendChild(d); };
+  const { model, error } = parseModel(text);
+  if (error) { add("err", error); lastValidation = { errors: [error], warnings: [] }; return; }
+  renderStructure(model);
+  lastValidation = validateModel(model);
+  lastValidation.errors.forEach((e) => add("err", "✕ " + e));
+  lastValidation.warnings.forEach((w) => add("warn", "⚠ " + w));
+  if (!lastValidation.errors.length) {
+    currentModel = model;
+    if (!lastValidation.warnings.length) add("ok", "✓ Structure is valid and every control action has a feedback path");
+    const kept = selectedItems(model).map((it) => it.id);
+    if (kept.length !== selection.size) { selection = new Set(kept); store.set("selection", kept); }
+    renderDiagram(model);
+    renderSafetyCase(model);
+  }
+}
+function setEditor(obj) { $("editor").value = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); refreshEditor(); }
+/** Like setEditor, but as an edit the browser can undo (Ctrl/⌘+Z in the editor). */
+function replaceEditor(obj) {
+  const ed = $("editor"), back = document.activeElement, text = JSON.stringify(obj, null, 2);
+  ed.focus({ preventScroll: true }); ed.select();
+  // insertText goes to the focused element, so it is only used when the editor really has focus.
+  if (document.activeElement !== ed || !document.execCommand("insertText", false, text)) ed.value = text;
+  ed.setSelectionRange(0, 0); ed.scrollTop = 0;
+  if (back && back !== ed && back.focus) back.focus({ preventScroll: true });
+  clearTimeout(editTimer); refreshEditor();
+}
+
+/* A patch is a partial structure with "patch": true. Ids listed in "remove" are deleted from every section
+   first; then elements whose id exists are merged into the existing element (process_model one level deep)
+   and new ids are appended to their section. Removing an id and adding it to another section switches its
+   type (e.g. an actuator becomes a controlled process). Asking for patches keeps scoped answers short. */
+const STRUCT_KEYS = ["losses", "hazards", "constraints", "controllers", "controlled_processes", "actuators", "sensors", "control_actions", "feedback", "ucas"];
+function applyPatch(base, patch) {
+  const m = structuredClone(base), stats = { added: 0, changed: 0, removed: 0 };
+  if (typeof patch.system === "string") m.system = patch.system;
+  const gone = new Set(Array.isArray(patch.remove) ? patch.remove : []);
+  if (gone.size) STRUCT_KEYS.forEach((k) => {
+    if (!Array.isArray(m[k])) return;
+    const n = m[k].length;
+    m[k] = m[k].filter((x) => !(x && gone.has(x.id)));
+    stats.removed += n - m[k].length;
+  });
+  STRUCT_KEYS.forEach((k) => {
+    if (!Array.isArray(patch[k])) return;
+    const list = Array.isArray(m[k]) ? m[k] : (m[k] = []);
+    patch[k].forEach((item) => {
+      if (!item || !item.id) return;
+      const cur = list.find((x) => x && x.id === item.id);
+      if (!cur) { list.push(item); stats.added++; return; }
+      const pm = cur.process_model && item.process_model ? { process_model: { ...cur.process_model, ...item.process_model } } : {};
+      Object.assign(cur, item, pm); stats.changed++;
+    });
+  });
+  return { model: m, stats };
+}
+
+let editTimer;
+$("editor").addEventListener("input", () => { clearTimeout(editTimer); editTimer = setTimeout(refreshEditor, 250); });
+$("editor").addEventListener("keydown", (e) => { // Tab inserts two spaces instead of leaving the editor
+  if (e.key === "Tab" && !e.shiftKey) { e.preventDefault(); document.execCommand("insertText", false, "  "); }
+});
+Object.keys(PRESETS).forEach((name) => $("preset").appendChild(new Option(name, name)));
+$("preset").addEventListener("change", (e) => {
+  const name = e.target.value; e.target.value = "";
+  if (name && confirm(`Replace the editor contents with "${name}"?`)) setEditor(PRESETS[name]);
+});
+$("formatBtn").addEventListener("click", () => { const { model } = parseModel($("editor").value); if (model) setEditor(model); });
+$("exportBtn").addEventListener("click", () => {
+  const name = (currentModel?.system || "stpa").replace(/[^\w-]+/g, "_").slice(0, 60);
+  download(`${name}.json`, $("editor").value, "application/json");
+});
+$("importBtn").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (f) setEditor(await f.text());
+});
+const setStatus = (t) => ($("status").textContent = t);
+function download(filename, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4. The AI panel
+   The panel itself is shared by every HFA tool (ai-assist.js, copied from hfa-ds/scripts/ai-panel).
+   What is specific to STPA is configured here: the system prompt, the schema it appends, the quick actions,
+   what counts as an applicable answer and how it is applied.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const DEFAULT_SYSTEM_PROMPT = `You are an expert safety analyst applying STPA (System-Theoretic Process Analysis, Leveson & Thomas, STPA Handbook) to the hierarchical control structure supplied as JSON.
+
+Method:
+1. Losses, hazards and system-level constraints: use those in the JSON; propose missing ones explicitly marked as proposals.
+2. Unsafe Control Actions (UCAs): for EVERY control action evaluate all four types —
+   (a) Not providing causes a hazard; (b) Providing causes a hazard;
+   (c) Providing too early, too late or out of sequence; (d) Stopped too soon or applied too long.
+   Write each UCA as: <Source controller> <type> <control action> when <context>, leading to [H#]. Give each an id (UCA-1, …).
+3. Loss scenarios and causal factors, including process-model flaws: the controller's belief diverges from the real process state
+   (e.g. believes the vehicle is stationary when it is moving), missing/delayed/incorrect feedback (compare feedback latency_tolerance_ms
+   with the control loop's dynamics), stale assumptions, conflicting controllers, and unsafe control algorithms.
+4. Derive controller constraints that prevent each UCA, traceable to UCA ids.
+
+Rules:
+- Reference elements by their JSON ids (c1, ca2, fb3, H1…). Do not invent components without labelling them "proposed".
+- Prefer Markdown tables for UCA lists: columns Control action | Not provided | Provided | Too early/late/order | Too long/short.
+- Be concise and specific; state uncertainty instead of guessing.
+- If you propose a reconfigured structure, give it in one \`\`\`json block using the same schema (a patch, as described below, unless the complete structure is asked for), including any new UCAs under
+  "ucas": [{"id": "UCA-n", "control_action": "<control_action id>", "type": "not_provided" | "provided_unsafe" | "wrong_timing" | "wrong_duration", "context": "…", "hazards": ["H#"]}]
+  so they appear in the editor's UCA table alongside the losses, hazards and constraints.`;
+
+/* Appended after the (editable) system prompt, so saved custom prompts still learn the schema additions and patches. */
+const STRUCTURE_PROMPT = `
+
+Schema additions:
+- "actuators": [{"id": "a1", "name": "…", "target": "<controlled process id>", "actuation": "<what it does to the process>"}]
+- "sensors": [{"id": "s1", "name": "…", "source": "<controlled process id>", "measures": "<quantity measured>"}]
+A control action may target an actuator, and feedback may come from a sensor; the actuator acts on its target process and the sensor measures its source process. Use them when detailing how a controller acts on or observes a process (e.g. redundant or diverse channels), or when the user asks you to add one.
+- A control action's "action" and a feedback's "signal" may be one label or a list of labels (["Apply brake", "Release brake"]) when one link carries several commands or signals.
+
+Changing the structure: unless the user explicitly asks for the complete structure, do NOT repeat unchanged elements. Return one \`\`\`json block that is a patch:
+{"patch": true, "controlled_processes": [{"id": "p1", "name": "New name"}], "actuators": [{"id": "a2", …}], "remove": ["ca2"]}
+Ids in "remove" are deleted first; then an element whose id already exists is merged into it (only the fields you give change) and a new id is added. Keep existing ids stable so UCAs and links stay valid, and give new elements ids that are not used yet.
+To change an element's type (for example an actuator that should become a controlled process, or a process that should become a sensor), list its id in "remove" and add the complete element with the same id to the new section; its control actions and feedback keep pointing at that id.`;
+
+
+const QUICK_ACTIONS = [
+  ["Identify UCAs", "Identify the Unsafe Control Actions for every control action in the current structure, in a table per controller, with hazard links."],
+  ["Loss scenarios", "For the most severe UCAs, develop loss scenarios: why would the controller issue the unsafe action (process-model flaws, feedback problems, algorithm flaws) and why might a correct action not be followed?"],
+  ["Check feedback latency", "Check every feedback path: is latency_tolerance_ms adequate for the dynamics of the control loop it closes? Flag missing, delayed or insufficient feedback and open loops, and the process-model flaws each could cause."],
+  ["Process-model flaws", "For each controller, list ways its process model (variables and assumptions) can diverge from the actual process state, and the UCAs each divergence would cause."],
+  ["Suggest reconfiguration", "Suggest a reconfiguration of the control structure that closes open loops and reduces the most severe UCAs. Explain the changes, then give the complete revised JSON."],
+  ["Safety constraints", "Derive controller-level safety constraints from the UCAs, traceable to UCA and hazard ids."],
+];
+
+
+window.STPAAssist = HFAAssist.mount({
+  id: "stpa",
+  title: "STPA analysis",
+  subject: "the control structure",
+  toolbar: document.querySelector("header .row"),
+  systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  schemaPrompt: () => STRUCTURE_PROMPT + (lastValidation.errors.length
+    ? `\n\nNote: the editor currently has errors (${lastValidation.errors.join("; ")}); the last valid version is shown.` : ""),
+  contextLabel: "Current control structure (JSON)",
+  getContext: () => currentModel || {},
+  getScope: () => {
+    const items = selectedItems();
+    if (!items.length) return null;
+    const picked = {};
+    items.forEach(({ kind, obj }) => (picked[kind] ||= []).push(obj));
+    return { label: items.map((it) => it.id).join(", "), items: picked };
+  },
+  quickActions: QUICK_ACTIONS,
+  inspect: (obj) => {
+    if (obj.patch === true) {
+      const n = (k) => (Array.isArray(obj[k]) ? obj[k].length : 0);
+      const parts = STRUCT_KEYS.filter(n).map((k) => `${n(k)} ${k.replace(/_/g, " ")}`);
+      if (n("remove")) parts.push(`remove ${obj.remove.join(", ")}`);
+      return { title: `Structure patch · ${parts.join(", ") || "no changes"}`, applyLabel: "Apply to editor" };
+    }
+    if (!Array.isArray(obj.controllers)) return null;
+    const errors = validateModel(obj).errors.length;
+    return { title: `Control structure · ${(obj.controllers || []).length} controllers, ${(obj.control_actions || []).length} actions, ${(obj.feedback || []).length} feedback`,
+      applyLabel: errors ? `Load anyway (${errors} errors)` : "Load into editor",
+      confirm: "Replace the editor contents with this structure? (Undo in the editor restores the current one.)" };
+  },
+  apply: (obj) => {
+    if (obj.patch === true) {
+      if (!currentModel) throw new Error("Fix the JSON in the editor first.");
+      const { model, stats } = applyPatch(currentModel, obj);
+      const errs = validateModel(model).errors;
+      if (errs.length && !confirm(`The merged structure has ${errs.length} error(s):\n\n${errs.slice(0, 8).join("\n")}\n\nApply anyway?`)) return false;
+      replaceEditor(model);
+      return `Patch applied: ${stats.added} added, ${stats.changed} changed, ${stats.removed} removed. Ctrl/⌘+Z in the editor undoes it.`;
+    }
+    replaceEditor(obj);
+    return "Structure loaded. Ctrl/⌘+Z in the editor undoes it.";
+  },
+  snapshot: () => $("editor").value,
+  restore: (text) => setEditor(text),
+  welcome: "Edit the control structure (or load a preset), pick a provider in **Settings…**, then use a quick action or ask a question. The current structure is sent with every request; select elements in the diagram to focus on them.",
+  exportName: "stpa-analysis",
+});
+
+const expandDiagram = (on) => {
+  $("diagramPane").classList.toggle("full", on);
+  $("expandBtn").textContent = on ? "Close" : "Full page";
+  $("expandBtn").setAttribute("aria-pressed", String(on));
+};
+$("expandBtn").addEventListener("click", () => expandDiagram(!$("diagramPane").classList.contains("full")));
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  expandDiagram(false);
+});
+
+
+$("themeBtn").addEventListener("click", () => {
+  const dark = document.documentElement.dataset.theme
+    ? document.documentElement.dataset.theme === "dark"
+    : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  store.set("theme", document.documentElement.dataset.theme);
+});
+
+/* ── Boot ─────────────────────────────────────────────────────────────── */
+(function boot() {
+  const theme = store.get("theme"); if (theme) document.documentElement.dataset.theme = theme;
+  applyViews();
+  ["scLosses", "scHazards", "scUcas", "scConstraints", "stBlocks", "stCas", "stFbs"].forEach((id) => {
+    const el = $(id), saved = store.get("open:" + id);
+    if (saved !== null) el.open = saved;
+    el.addEventListener("toggle", () => store.set("open:" + id, el.open));
+  });
+  setEditor(store.get("structure") || PRESETS["Autonomous Emergency Braking (AEB)"]);
+})();
+</script>
+</body>
+</html>
