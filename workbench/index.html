@@ -5,18 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HFA STPA Workbench</title>
 <!--
-  HFA STPA Workbench — single-file, zero-dependency STPA control-structure editor + LLM analyst.
+  HFA STPA Workbench — STPA control-structure editor + LLM analyst (the analyst is the shared HFA AI panel, ai-assist.js, next to this file).
 
   Open this file directly (file://) or serve it from any static server. No build step, no frameworks.
+  stpa_offline.html is the same tool with ai-assist.js inlined (npm run build:offline in hfa-ds), for use as one file.
   Colours come from the HFA DS tokens (tokens.json → mode/light, mode/dark), copied in as CSS variables.
 
   Sections in the <script> below:
     1. Storage helpers (localStorage, guarded)
     2. Presets + STPA data model validation
     3. Control-structure diagram (SVG)
-    4. Provider adapters: callLLM() for Claude / Gemini / local (Ollama, LM Studio, LocalAI)
-    5. MCP layer: tool schemas in MCP format, local JSON-RPC dispatcher, optional MCP-over-SSE bridge
-    6. Chat loop, Markdown rendering, quick actions
+    4. The AI panel: STPA's configuration of the shared panel (ai-assist.js, one file for every HFA tool)
 -->
 <style>
   :root {
@@ -30,6 +29,11 @@
     --shadow-hover: rgba(0,0,0,.2); --shadow-sel: rgba(0,0,0,.2);
     --font: "Source Sans 3", "Source Sans Pro", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    /* The shared AI panel (ai-assist.js) reads the HFA DS token names; this tool's variables carry the same values. */
+    --color-background-base: var(--bg); --color-background-elevated: var(--bg-elev); --color-background-sunken: var(--bg-sunken);
+    --color-foreground: var(--fg); --color-foreground-muted: var(--fg-muted); --color-foreground-subtle: var(--fg-subtle);
+    --color-brand-primary: var(--brand); --color-background-warning: var(--bg-warning);
+    --font-sans: var(--font); --font-mono: var(--mono);
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
@@ -73,16 +77,13 @@
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     padding: 8px 16px; background: var(--bg-elev); border-bottom: 1px solid var(--border);
   }
+  /* Same button colour as in the AI panel header, so the panel toggle looks the same wherever it sits (design principle 4.7). */
+  header button:not(.primary) { background: var(--bg); }
   header h1 { font-size: 16px; margin: 0 auto 0 0; display: flex; align-items: center; gap: 8px; }
   header h1 .mark { width: 10px; height: 10px; border-radius: 2px; background: var(--brand); }
   .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
-  /* --left/--right are the panel shares set by the splitter and the panels' Expand/Compress buttons. */
-  main { flex: 1; display: grid; grid-template-columns: minmax(0, var(--left, 1fr)) 12px minmax(0, var(--right, 1fr)); padding: 12px 16px; min-height: 0; }
-  #splitter { cursor: col-resize; display: flex; justify-content: center; touch-action: none; }
-  #splitter::before { content: ""; width: 2px; height: 100%; border-radius: 1px; background: transparent; }
-  #splitter:hover::before, #splitter:focus-visible::before, #splitter.drag::before { background: var(--border); }
-  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); gap: 12px; } #splitter, .panel .wbtn { display: none; } }
+  main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); padding: 12px 16px; min-height: 0; }
   .panel { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   .panel > .pbody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
   /* Views: each has a bar with its title (click to compress) and an Expand button. A compressed view keeps its
@@ -145,12 +146,6 @@
   #selBar button { padding: 2px 8px; font-size: 12px; }
   .selchip { display: inline-flex; align-items: center; gap: 2px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px; padding: 0 2px 0 8px; color: var(--fg); }
   .selchip button { border: 0; background: none; padding: 0 5px; font-size: 12px; line-height: 18px; color: var(--fg-muted); }
-  #scopeLine { font-size: 12px; color: var(--fg-muted); padding: 6px 10px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-  #scopeLine strong { color: var(--fg); font-weight: 600; }
-  #scopeLine label { display: inline-flex; gap: 4px; align-items: center; }
-  #scopeLine .folds { display: inline-flex; gap: 6px; margin-left: auto; }
-  #scopeLine .folds button { padding: 2px 8px; font-size: 12px; }
-  #modelPick { max-width: 210px; }
   .tables { border-top: 1px solid var(--border); max-height: 32vh; overflow: auto; }
   .tables details { border-bottom: 1px solid var(--border); }
   .tables summary { cursor: pointer; padding: 7px 10px; font-size: 13px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 6px; }
@@ -185,66 +180,7 @@
   #structureWrap .adds { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 6px; }
   #structureWrap .adds button { padding: 2px 8px; font-size: 12px; }
   #structureWrap .note { padding: 6px 10px; font-size: 12px; color: var(--fg-muted); }
-  /* The log scrolls as one column: entries keep their full height (flex: none) instead of shrinking into scroll boxes. */
-  #logWrap { position: relative; flex: 1; min-height: 160px; display: flex; flex-direction: column; }
-  #log { flex: 1; min-height: 0; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
-  #log > * { flex: none; }
-  #toBottom { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); width: 32px; height: 32px; padding: 0;
-    border-radius: 50%; box-shadow: 0 2px 8px var(--shadow-hover); font-size: 16px; line-height: 1; }
-  #toBottom[hidden] { display: none; }
-  .msg .meta .fold { border: 0; background: none; padding: 0 4px; margin-left: 2px; font-size: 11px; color: var(--fg-muted); vertical-align: baseline; }
-  .msg .meta .fold:hover { color: var(--fg); }
-  .msg .gist { display: none; color: var(--fg-muted); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .msg.folded .gist { display: block; }
-  .msg.folded > .body { display: none; }
-  .msg { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; max-width: 100%; overflow-x: auto; }
-  .msg.user { background: var(--brand-subtle); align-self: flex-end; max-width: 90%; white-space: pre-wrap; }
-  .msg.assistant { background: var(--bg-elev); }
-  .tool-chip { font-size: 12px; color: var(--fg-muted); background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 8px; }
-  .tool-chip summary { cursor: pointer; list-style: none; }
-  .tool-chip summary::before { content: "▸ "; }
-  .tool-chip[open] summary::before { content: "▾ "; }
-  .tool-chip.err summary { color: var(--error); }
-  .tool-chip pre { margin: 6px 0 2px; background: var(--bg-elev); padding: 8px; border-radius: 4px; overflow: auto; font: 12px/1.45 var(--mono); }
-  #log.hide-tools .tool-chip { display: none; }
-  .struct-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev); padding: 8px 12px; }
-  .struct-card .head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-  .struct-card .head strong { margin-right: auto; font-size: 13px; }
-  .struct-card .head button { padding: 3px 10px; font-size: 12px; }
-  .struct-card details { margin-top: 6px; }
-  .struct-card summary { cursor: pointer; font-size: 12px; color: var(--fg-muted); }
-  .struct-card pre { background: var(--bg-sunken); padding: 8px; border-radius: 4px; overflow: auto; font: 12px/1.45 var(--mono); }
-  .msg.error { background: var(--bg-error); }
-  .msg .meta { font-size: 11px; color: var(--fg-subtle); margin-bottom: 4px; }
-  .msg pre { background: var(--bg-sunken); padding: 8px; border-radius: 4px; overflow: auto; font: 12px/1.45 var(--mono); }
-  .msg code { font-family: var(--mono); font-size: 12px; }
-  .msg table { border-collapse: collapse; margin: 6px 0; font-size: 13px; }
-  .msg th, .msg td { border: 1px solid var(--border); padding: 3px 6px; text-align: left; vertical-align: top; }
-  .msg th { background: var(--bg-sunken); }
-  .msg h3, .msg h4, .msg h5 { margin: 10px 0 4px; }
-  .msg p { margin: 6px 0; }
-  .msg ul, .msg ol { margin: 4px 0; padding-left: 22px; }
-  .quick { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px; border-bottom: 1px solid var(--border); }
-  form#chat { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
-  #prompt { flex: 1; resize: vertical; min-height: 40px; max-height: 200px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev); }
   .status { font-size: 12px; color: var(--fg-muted); padding: 0 10px 6px; min-height: 18px; }
-  .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--fg-muted); }
-
-  /* Config drawer */
-  #drawer { position: fixed; inset: 0 0 0 auto; width: min(440px, 100vw); background: var(--bg-elev); border-left: 1px solid var(--border);
-    box-shadow: -8px 0 24px rgba(0,0,0,.18); transform: translateX(100%); transition: transform .18s ease; z-index: 10; overflow: auto; padding: 14px 16px; }
-  #drawer.open { transform: none; }
-  #drawer h2 { font-size: 15px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: center; }
-  #drawer fieldset { border: 1px solid var(--border); border-radius: var(--radius); margin: 0 0 12px; padding: 8px 10px 10px; }
-  #drawer legend { font-weight: 600; padding: 0 4px; }
-  #drawer fieldset[data-provider].active { border-color: var(--brand); }
-  #drawer fieldset[data-provider].active legend::after { content: "Active"; margin-left: 6px; font-size: 11px; font-weight: 500; padding: 1px 7px; border-radius: 999px; background: var(--brand); color: var(--on-brand); }
-  #drawer fieldset[data-provider]:not(.active) { opacity: .7; }
-  #drawer label { display: grid; gap: 2px; margin: 6px 0; font-size: 13px; color: var(--fg-muted); }
-  #drawer label.inline { display: flex; align-items: center; gap: 6px; }
-  #drawer input[type=text], #drawer input[type=password], #drawer input[type=url], #drawer input[type=number], #drawer select { width: 100%; color: var(--fg); }
-  #drawer .hint { font-size: 12px; color: var(--fg-subtle); margin: 4px 0 0; }
-  #drawer textarea { width: 100%; min-height: 120px; font: 12px/1.4 var(--mono); background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; }
 </style>
 </head>
 <body>
@@ -252,9 +188,7 @@
 <header>
   <h1><span class="mark"></span>HFA STPA Workbench</h1>
   <div class="row">
-    <span id="providerPill" class="pill" title="Active LLM provider — change it in Settings"></span>
     <button id="themeBtn" title="Toggle light/dark theme">Theme</button>
-    <button id="settingsBtn" class="primary">Settings</button>
   </div>
 </header>
 
@@ -268,8 +202,6 @@
       <button id="importBtn" title="Open a .json file">Open…</button>
       <button id="exportBtn" title="Save the structure as a JSON file">Save</button>
       <button id="undoBtn" title="Undo the last change to the structure (also from the tables and conversions)">Undo</button>
-      <button class="wbtn" data-panel="left" data-dir="-1" aria-label="Compress the control structure panel" title="Compress the control structure panel (more room for the analysis)">⇤</button>
-      <button class="wbtn" data-panel="left" data-dir="1" aria-label="Expand the control structure panel" title="Expand the control structure panel (½ → ⅔ → ¾)">⇥</button>
       <input type="file" id="fileInput" accept=".json,application/json" hidden>
     </div>
     <div class="pbody">
@@ -335,109 +267,11 @@
     </div>
   </section>
 
-  <div id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize the panels" tabindex="0" title="Drag to resize the panels (arrow keys work too; double-click resets)"></div>
-
-  <!-- ───────────── Right: analysis chat ───────────── -->
-  <section class="panel" id="rightPanel" aria-label="Analysis">
-    <div class="bar">
-      <h2>Analysis</h2>
-      <button id="clearBtn" title="Start a new conversation">New chat</button>
-      <button id="saveLogBtn" title="Download conversation as Markdown">Export .md</button>
-      <button id="toolsBtn" type="button" title="Show or hide the tool-call rows in the chat">Hide tool calls</button>
-      <button class="wbtn" data-panel="right" data-dir="-1" aria-label="Compress the analysis panel" title="Compress the analysis panel (more room for the control structure)">⇥</button>
-      <button class="wbtn" data-panel="right" data-dir="1" aria-label="Expand the analysis panel" title="Expand the analysis panel">⇤</button>
-    </div>
-    <div class="quick" id="quick"></div>
-    <div id="scopeLine">
-      <span id="scopeText"></span>
-      <span class="folds">
-        <button id="foldAll" type="button" title="Fold every answer to one line">Compress</button>
-        <button id="unfoldAll" type="button" title="Show every answer in full">Expand</button>
-      </span>
-      <label title="Off: each question is sent with the control structure and the selection only. On: earlier questions and answers are sent too (more tokens)."><input type="checkbox" id="keep_history"> Send earlier turns</label>
-    </div>
-    <div id="logWrap">
-      <div id="log" aria-live="polite"></div>
-      <button id="toBottom" type="button" hidden aria-label="Scroll to the latest message" title="Scroll to the latest message">↓</button>
-    </div>
-    <div class="status" id="status"></div>
-    <form id="chat">
-      <textarea id="prompt" placeholder="Ask about the control structure… (Enter sends, Shift+Enter for a new line)" aria-label="Message"></textarea>
-      <select id="modelPick" aria-label="Model for the next question" title="Model for the next question"></select>
-      <button type="submit" class="primary" id="sendBtn">Send</button>
-    </form>
-  </section>
 </main>
 
-<!-- ───────────── Config drawer ───────────── -->
-<aside id="drawer" aria-label="Settings" aria-hidden="true">
-  <h2>Settings <button id="closeDrawer" aria-label="Close settings">✕</button></h2>
+<div class="status" id="status" role="status" aria-live="polite"></div>
 
-  <fieldset>
-    <legend>Active provider</legend>
-    <label>Send questions to
-      <select id="provider">
-        <option value="claude">Anthropic Claude</option>
-        <option value="gemini">Google Gemini</option>
-        <option value="local">Local LLM (Ollama / LM Studio / LocalAI)</option>
-      </select>
-    </label>
-    <div class="row"><button id="refreshModels" type="button">Refresh model list</button><span id="modelsState" class="pill"></span></div>
-    <p class="hint">Only the active provider is called. Settings for the others are kept, so you can switch back at any time. The model list beside Send is read from the provider's models endpoint.</p>
-  </fieldset>
-
-  <fieldset data-provider="claude">
-    <legend>Anthropic Claude</legend>
-    <label>API key <input type="password" id="claude_key" autocomplete="off" placeholder="sk-ant-…"></label>
-    <label>Model <input type="text" id="claude_model" list="claudeModels"></label>
-    <datalist id="claudeModels"></datalist>
-    <label>Max output tokens <input type="number" id="claude_max_tokens" min="1024" max="128000" step="1024"></label>
-    <label>Effort
-      <select id="claude_effort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select>
-    </label>
-    <label class="inline"><input type="checkbox" id="claude_fallbacks" checked> Server-side refusal fallback (<code>fallbacks: "default"</code>)</label>
-    <p class="hint">Responses stream, so long answers do not time out; the limit is capped at what the chosen model allows. Effort and fallback are only sent to models that accept them.</p>
-    <p class="hint">Calls api.anthropic.com directly from the browser with <code>anthropic-dangerous-direct-browser-access</code>. Your key is visible to anyone using this browser profile — use a restricted key.</p>
-  </fieldset>
-
-  <fieldset data-provider="gemini">
-    <legend>Google Gemini</legend>
-    <label>API key <input type="password" id="gemini_key" autocomplete="off"></label>
-    <label>Model <input type="text" id="gemini_model" placeholder="gemini-2.5-pro" list="geminiModels"></label>
-    <datalist id="geminiModels"></datalist>
-    <p class="hint">Sent as the <code>x-goog-api-key</code> header (not in the URL).</p>
-  </fieldset>
-
-  <fieldset data-provider="local">
-    <legend>Local LLM</legend>
-    <label>Endpoint <input type="url" id="local_endpoint" placeholder="http://localhost:11434/v1/chat/completions"></label>
-    <label>Model <input type="text" id="local_model" placeholder="llama3.1" list="localModels"></label>
-    <datalist id="localModels"></datalist>
-    <label>API key (optional, sent as Bearer) <input type="password" id="local_key" autocomplete="off"></label>
-    <p class="hint">Endpoint path picks the wire format: a base URL ending in <code>/v1</code> or the full <code>/v1/chat/completions</code> (OpenAI-compatible: LiteLLM, Ollama, LM Studio, LocalAI), <code>/api/chat</code> or <code>/api/generate</code> (Ollama native). For Ollama from <code>file://</code>, start it with <code>OLLAMA_ORIGINS=*</code>.</p>
-  </fieldset>
-
-  <fieldset>
-    <legend>MCP</legend>
-    <label class="inline"><input type="checkbox" id="mcp_enabled" checked> Let the model call STPA tools (JSON-RPC <code>tools/call</code>)</label>
-    <label>MCP-over-SSE gateway URL (optional) <input type="url" id="mcp_sse_url" placeholder="http://localhost:8808/sse"></label>
-    <div class="row"><button id="mcpConnect" type="button">Connect gateway</button><span id="mcpState" class="pill">local tools only</span></div>
-    <p class="hint">Without a gateway, tools run locally in this page. With one, remote tools are listed alongside them and routed over SSE.</p>
-  </fieldset>
-
-  <fieldset>
-    <legend>System prompt</legend>
-    <textarea id="system_prompt" spellcheck="false"></textarea>
-    <div class="row" style="margin-top:6px"><button id="resetPrompt" type="button">Reset to default</button></div>
-  </fieldset>
-
-  <fieldset>
-    <legend>Storage</legend>
-    <label class="inline"><input type="checkbox" id="remember_keys" checked> Remember API keys in this browser (localStorage)</label>
-    <div class="row"><button id="forgetKeys" type="button">Forget stored keys</button></div>
-    <p class="hint">Keys never leave this page except in requests to the provider you select.</p>
-  </fieldset>
-</aside>
+<script src="ai-assist.js"></script>
 
 <script>
 "use strict";
@@ -1079,15 +913,6 @@ function applySelection() {
       sw,
       btn("Clear", "Clear the selection (analyse the whole structure)", () => setSelection([])));
   }
-  renderScopeLine(items);
-}
-
-function renderScopeLine(items) {
-  const t = $("scopeText");
-  t.replaceChildren();
-  const strong = document.createElement("strong");
-  strong.textContent = "Scope: ";
-  t.append(strong, items.length ? `focus on ${items.map((it) => it.id).join(", ")} (whole structure sent as context)` : "whole control structure");
 }
 
 $("diagram").addEventListener("click", (e) => {
@@ -1467,9 +1292,7 @@ $("structureWrap").addEventListener("focusout", (e) => { if (!e.relatedTarget ||
    the free height. The two panels share the width; the splitter or the panels' Expand/Compress buttons move it
    in steps (¼ ⅓ ½ ⅔ ¾), so the control structure can take ⅔ or ¾ with the analysis still in view. */
 const VIEW_IDS = ["vJson", "vDiagram", "vStructure", "vSafety"];
-const SPLIT_STEPS = [1 / 4, 1 / 3, 1 / 2, 2 / 3, 3 / 4];
 let viewState = store.get("views", {}) || {};
-let split = clamp(store.get("split", 0.5), 0.25, 0.75, 0.5);
 
 function setView(id, patch) {
   const st = { ...viewState[id], ...patch };
@@ -1502,44 +1325,6 @@ VIEW_IDS.forEach((id) => {
   mk("vcomp", "Compress", `Compress ${name} to its bar (press again to show it)`, () => setView(id, { compressed: !viewState[id]?.compressed }));
   mk("vexp", "Expand", `Let ${name} take the free height (press again to restore)`, () => setView(id, { expanded: !viewState[id]?.expanded }));
 });
-
-function setSplit(v) {
-  split = clamp(v, 0.25, 0.75, 0.5);
-  const main = document.querySelector("main");
-  main.style.setProperty("--left", split + "fr");
-  main.style.setProperty("--right", 1 - split + "fr");
-  const sp = $("splitter");
-  sp.setAttribute("aria-valuenow", String(Math.round(split * 100)));
-  sp.setAttribute("aria-valuetext", `Control structure ${Math.round(split * 100)} %, analysis ${Math.round((1 - split) * 100)} %`);
-  document.querySelectorAll(".wbtn").forEach((b) => {
-    const grow = (b.dataset.panel === "left") === (b.dataset.dir === "1");
-    b.disabled = grow ? split > 0.74 : split < 0.26;
-  });
-  store.set("split", split);
-}
-document.querySelectorAll(".wbtn").forEach((b) => b.addEventListener("click", () => {
-  const grow = (b.dataset.panel === "left") === (b.dataset.dir === "1");
-  const next = grow ? SPLIT_STEPS.find((x) => x > split + 0.01) : [...SPLIT_STEPS].reverse().find((x) => x < split - 0.01);
-  if (next !== undefined) setSplit(next);
-}));
-(() => {
-  const sp = $("splitter"), main = document.querySelector("main");
-  sp.setAttribute("aria-valuemin", "25"); sp.setAttribute("aria-valuemax", "75");
-  const at = (x) => {
-    const r = main.getBoundingClientRect(), cs = getComputedStyle(main);
-    const left = r.left + parseFloat(cs.paddingLeft), width = r.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - sp.offsetWidth;
-    return (x - left - sp.offsetWidth / 2) / width;
-  };
-  sp.addEventListener("pointerdown", (e) => { sp.setPointerCapture(e.pointerId); sp.classList.add("drag"); e.preventDefault(); });
-  sp.addEventListener("pointermove", (e) => { if (sp.hasPointerCapture(e.pointerId)) setSplit(at(e.clientX)); });
-  sp.addEventListener("pointerup", (e) => { sp.releasePointerCapture(e.pointerId); sp.classList.remove("drag"); });
-  sp.addEventListener("dblclick", () => setSplit(0.5));
-  sp.addEventListener("keydown", (e) => {
-    const step = { ArrowLeft: -0.05, ArrowRight: 0.05 }[e.key];
-    if (step) { setSplit(split + step); e.preventDefault(); }
-    else if (e.key === "Home" || e.key === "End") { setSplit(e.key === "Home" ? 0.25 : 0.75); e.preventDefault(); }
-  });
-})();
 
 $("undoBtn").addEventListener("click", () => {
   const ed = $("editor");
@@ -1633,6 +1418,7 @@ $("fileInput").addEventListener("change", async (e) => {
   const f = e.target.files[0]; e.target.value = "";
   if (f) setEditor(await f.text());
 });
+const setStatus = (t) => ($("status").textContent = t);
 function download(filename, text, type) {
   const url = URL.createObjectURL(new Blob([text], { type }));
   const a = Object.assign(document.createElement("a"), { href: url, download: filename });
@@ -1641,363 +1427,12 @@ function download(filename, text, type) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   4. Provider adapters
-   callLLM() takes a provider-neutral conversation and returns { text, raw }.
-   messages: [{ role: "user" | "assistant", content: string }]
-   Errors are thrown with the provider's own message so they show in the log.
+   4. The AI panel
+   The panel itself is shared by every HFA tool (ai-assist.js, copied from hfa-ds/scripts/ai-panel).
+   What is specific to STPA is configured here: the system prompt, the schema it appends, the quick actions,
+   what counts as an applicable answer and how it is applied.
    ═══════════════════════════════════════════════════════════════════════════ */
-const DEFAULTS = {
-  claude_model: "claude-opus-5-5",
-  gemini_model: "gemini-2.5-pro",
-  local_endpoint: "http://localhost:11434/v1/chat/completions",
-  local_model: "llama3.1",
-  claude_max_tokens: 64000,
-};
 
-/* Claude models offered in the picker. maxOut caps max_tokens; effort lists the accepted levels (null: don't send
-   output_config); fallback marks the models that take server-side refusal fallback (fallbacks: "default"). */
-const EFFORT_ALL = ["low", "medium", "high", "xhigh", "max"], EFFORT_46 = ["low", "medium", "high", "max"];
-const CLAUDE_MODELS = [
-  { id: "claude-fable-5-1", family: "Fable", label: "Fable 5.1", maxOut: 128000, effort: EFFORT_ALL, fallback: true },
-  { id: "claude-fable-5", family: "Fable", label: "Fable 5", maxOut: 128000, effort: EFFORT_ALL },
-  { id: "claude-opus-5-5", family: "Opus", label: "Opus 5.5", maxOut: 128000, effort: EFFORT_ALL, fallback: true },
-  { id: "claude-opus-5", family: "Opus", label: "Opus 5", maxOut: 128000, effort: EFFORT_ALL, fallback: true },
-  { id: "claude-opus-4-8", family: "Opus", label: "Opus 4.8", maxOut: 128000, effort: EFFORT_ALL },
-  { id: "claude-opus-4-7", family: "Opus", label: "Opus 4.7", maxOut: 128000, effort: EFFORT_ALL },
-  { id: "claude-opus-4-6", family: "Opus", label: "Opus 4.6", maxOut: 128000, effort: EFFORT_46 },
-  { id: "claude-sonnet-5-5", family: "Sonnet", label: "Sonnet 5.5", maxOut: 128000, effort: EFFORT_ALL, fallback: true },
-  { id: "claude-sonnet-5", family: "Sonnet", label: "Sonnet 5", maxOut: 128000, effort: EFFORT_ALL },
-  { id: "claude-sonnet-4-6", family: "Sonnet", label: "Sonnet 4.6", maxOut: 128000, effort: EFFORT_46 },
-  { id: "claude-haiku-5-5", family: "Haiku", label: "Haiku 5.5", maxOut: 128000, effort: EFFORT_ALL },
-  { id: "claude-haiku-4-5", family: "Haiku", label: "Haiku 4.5", maxOut: 64000, effort: null },
-];
-const GEMINI_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
-
-/** Read an Anthropic SSE stream into { content, stop_reason, stop_details, usage }. onText(chars) reports progress. */
-async function readClaudeStream(res, onText) {
-  if (!res.ok) return readJson(res); // throws with the API's error message
-  const reader = res.body.getReader(), dec = new TextDecoder();
-  const blocks = [], at = new Map(), usage = {};
-  let buf = "", chars = 0, stop_reason = null, stop_details = null;
-  const handle = (ev) => {
-    if (ev.type === "message_start") Object.assign(usage, ev.message?.usage);
-    else if (ev.type === "content_block_start") at.set(ev.index, blocks.push({ ...ev.content_block, text: ev.content_block?.text || "" }) - 1);
-    else if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta") {
-      const b = blocks[at.get(ev.index)]; if (b) b.text += ev.delta.text;
-      chars += ev.delta.text.length; onText?.(chars);
-    } else if (ev.type === "message_delta") {
-      stop_reason = ev.delta?.stop_reason ?? stop_reason;
-      stop_details = ev.delta?.stop_details ?? stop_details;
-      Object.assign(usage, ev.usage);
-    } else if (ev.type === "error") throw new Error(ev.error?.message || "stream error");
-  };
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-    let i;
-    while ((i = buf.indexOf("\n\n")) >= 0) {
-      const data = buf.slice(0, i).split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
-      buf = buf.slice(i + 2);
-      if (!data) continue;
-      let ev; try { ev = JSON.parse(data); } catch { continue; }
-      handle(ev);
-    }
-  }
-  return { content: blocks, stop_reason, stop_details, usage };
-}
-
-async function readJson(res) {
-  const raw = await res.text();
-  let data; try { data = JSON.parse(raw); } catch { data = null; }
-  if (!res.ok) {
-    const msg = data?.error?.message || data?.error || raw.slice(0, 500) || res.statusText;
-    throw new Error(`HTTP ${res.status}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
-  }
-  if (data === null) throw new Error("Response was not JSON: " + raw.slice(0, 300));
-  return data;
-}
-
-/** A bare OpenAI-compatible base URL (…/v1, as LiteLLM and most tools document it) gets /chat/completions appended;
-    full chat endpoints and Ollama's native /api/chat and /api/generate are used as given. */
-function localChatUrl(endpoint) {
-  const u = new URL(endpoint);
-  if (!/\/(chat\/completions|completions|api\/chat|api\/generate)\/?$/.test(u.pathname))
-    u.pathname = u.pathname.replace(/\/$/, "") + "/chat/completions";
-  return u.href;
-}
-
-/** Models endpoint for a local chat endpoint: …/chat/completions → …/models (OpenAI-compatible, LiteLLM),
-    …/api/chat or …/api/generate → …/api/tags (Ollama native). */
-function localModelsUrl(endpoint) {
-  const u = new URL(endpoint);
-  if (/\/api\/(chat|generate)\/?$/.test(u.pathname)) u.pathname = u.pathname.replace(/\/api\/(chat|generate)\/?$/, "/api/tags");
-  else u.pathname = u.pathname.replace(/\/chat\/completions\/?$|\/completions\/?$/, "") .replace(/\/$/, "") + "/models";
-  return u.href;
-}
-
-/** Ask the provider which models it serves. Returns [{ id, label }]. */
-async function listModels(provider) {
-  const cfg = settings;
-  if (provider === "claude") {
-    if (!cfg.claude_key) throw new Error("no API key");
-    const out = [];
-    for (let after = null; ;) {
-      const q = new URLSearchParams({ limit: "1000" }); if (after) q.set("after_id", after);
-      const data = await readJson(await fetch("https://api.anthropic.com/v1/models?" + q, { headers: {
-        "x-api-key": cfg.claude_key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" } }));
-      (data.data || []).forEach((m) => out.push({ id: m.id, label: m.display_name || m.id }));
-      if (!data.has_more || !data.last_id) return out;
-      after = data.last_id;
-    }
-  }
-  if (provider === "gemini") {
-    if (!cfg.gemini_key) throw new Error("no API key");
-    const out = [];
-    for (let page = ""; ;) {
-      const q = new URLSearchParams({ pageSize: "1000" }); if (page) q.set("pageToken", page);
-      const data = await readJson(await fetch("https://generativelanguage.googleapis.com/v1beta/models?" + q, { headers: { "x-goog-api-key": cfg.gemini_key } }));
-      (data.models || []).filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
-        .forEach((m) => { const id = m.name.replace(/^models\//, ""); out.push({ id, label: m.displayName || id }); });
-      if (!data.nextPageToken) return out;
-      page = data.nextPageToken;
-    }
-  }
-  if (provider === "local") {
-    const headers = {}; if (cfg.local_key) headers.authorization = "Bearer " + cfg.local_key;
-    const data = await readJson(await fetch(localModelsUrl(cfg.local_endpoint || DEFAULTS.local_endpoint), { headers }));
-    const list = data.data || data.models || [];
-    return list.map((m) => { const id = m.id || m.name || m.model; return { id, label: id }; }).filter((m) => m.id)
-      .sort((a, b) => a.id.localeCompare(b.id));
-  }
-  throw new Error("Unknown provider: " + provider);
-}
-
-async function callLLM({ provider, systemPrompt, messages, signal, onProgress }) {
-  const cfg = settings;
-
-  if (provider === "claude") {
-    if (!cfg.claude_key) throw new Error("Add an Anthropic API key in Settings.");
-    const headers = {
-      "content-type": "application/json",
-      "x-api-key": cfg.claude_key,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    };
-    const model = cfg.claude_model || DEFAULTS.claude_model;
-    const info = CLAUDE_MODELS.find((x) => x.id === model); // unknown (custom) ids get the request as configured
-    const want = clamp(cfg.claude_max_tokens, 1024, 128000, DEFAULTS.claude_max_tokens);
-    const body = {
-      model,
-      max_tokens: Math.min(want, info?.maxOut ?? want),
-      stream: true, // long answers (a whole revised structure) outlast a non-streaming request
-      cache_control: { type: "ephemeral" }, // the system prompt + structure repeat on every question
-      system: systemPrompt,
-      messages,
-    };
-    if (!info || info.effort) {
-      const effort = cfg.claude_effort || "medium";
-      body.output_config = { effort: !info || info.effort.includes(effort) ? effort : "high" };
-    }
-    if (cfg.claude_fallbacks && (!info || info.fallback)) { // re-run declined requests on a fallback model, server-side
-      headers["anthropic-beta"] = "server-side-fallback-2026-07-01";
-      body.fallbacks = "default";
-    }
-    const data = await readClaudeStream(await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body), signal }), onProgress);
-    // Thinking blocks may precede the answer, so join every text block instead of reading content[0].
-    const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n\n");
-    if (data.stop_reason === "refusal") {
-      const why = data.stop_details?.explanation || data.stop_details?.category || "no details";
-      return { text: (text ? text + "\n\n" : "") + `_The model declined this request (${why})._`, raw: data };
-    }
-    if (data.stop_reason === "max_tokens")
-      return { text: text + `\n\n_…output truncated at ${body.max_tokens} tokens. Narrow the scope (Shift+click the elements to focus on), ask for a patch, or raise Max output tokens in Settings._`, raw: data, usage: data.usage };
-    return { text: text || JSON.stringify(data), raw: data, usage: data.usage };
-  }
-
-  if (provider === "gemini") {
-    if (!cfg.gemini_key) throw new Error("Add a Gemini API key in Settings.");
-    const model = encodeURIComponent(cfg.gemini_model || DEFAULTS.gemini_model);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-    const body = {
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
-    };
-    const data = await readJson(await fetch(url, {
-      method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": cfg.gemini_key }, body: JSON.stringify(body), signal,
-    }));
-    const cand = data.candidates?.[0];
-    const text = (cand?.content?.parts || []).map((p) => p.text || "").join("");
-    if (!text && (data.promptFeedback?.blockReason || cand?.finishReason)) return { text: `_No answer (${data.promptFeedback?.blockReason || cand.finishReason})._`, raw: data };
-    return { text: text || JSON.stringify(data), raw: data };
-  }
-
-  if (provider === "local") {
-    const endpoint = localChatUrl(cfg.local_endpoint || DEFAULTS.local_endpoint);
-    const model = cfg.local_model || DEFAULTS.local_model;
-    const headers = { "content-type": "application/json" };
-    if (cfg.local_key) headers.authorization = "Bearer " + cfg.local_key;
-    const post = (body) => fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal }).then(readJson);
-
-    if (/\/api\/generate\/?$/.test(endpoint)) { // Ollama native, single prompt
-      const prompt = messages.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`).join("\n\n") + "\n\nAssistant:";
-      const data = await post({ model, system: systemPrompt, prompt, stream: false });
-      return { text: data.response ?? JSON.stringify(data), raw: data };
-    }
-    const chat = [{ role: "system", content: systemPrompt }, ...messages];
-    if (/\/api\/chat\/?$/.test(endpoint)) { // Ollama native chat
-      const data = await post({ model, messages: chat, stream: false });
-      return { text: data.message?.content ?? JSON.stringify(data), raw: data };
-    }
-    const data = await post({ model, messages: chat }); // OpenAI-compatible
-    return { text: data.choices?.[0]?.message?.content ?? JSON.stringify(data), raw: data };
-  }
-
-  throw new Error("Unknown provider: " + provider);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   5. MCP layer
-   Browsers cannot spawn stdio MCP servers, so this page speaks MCP's JSON-RPC
-   2.0 message shapes over two transports:
-
-   a) LOCAL — tools defined below (MCP "Tool" objects: name / description /
-      inputSchema) are executed in-page by mcpLocalDispatch(). The model calls
-      them by replying with a fenced ```mcp block holding a tools/call request;
-      the result goes back to it as the next user turn (max MAX_TOOL_ROUNDS).
-      This works with every provider, including small local models.
-
-   b) REMOTE — McpSseBridge implements the MCP HTTP+SSE client transport:
-        1. GET  <gateway>/sse                → server sends `event: endpoint` with a POST URL
-        2. POST <endpoint> {initialize}       → reply arrives as `event: message` on the SSE stream
-        3. POST <endpoint> notifications/initialized, then tools/list, tools/call …
-      To plug in a stdio server (filesystem, a requirements DB, a hazard log…), run
-      it behind a gateway that exposes SSE and allows CORS for this page's origin, e.g.
-          npx -y supergateway --stdio "npx -y @modelcontextprotocol/server-filesystem ./" --port 8808 --cors
-      then put http://localhost:8808/sse in Settings → MCP and press Connect. Remote tool
-      names are merged into the tool list shown to the model; calls to them are
-      forwarded over the bridge instead of running locally.
-      For Streamable-HTTP-only servers, replace connect()/request() with a single
-      POST to the MCP endpoint that reads either a JSON body or an SSE stream from
-      the response, keeping the same JSON-RPC payloads.
-   ═══════════════════════════════════════════════════════════════════════════ */
-const MAX_TOOL_ROUNDS = 4;
-let pendingProposal = null; // structure proposed via propose_reconfiguration, awaiting user approval
-
-const LOCAL_TOOLS = [
-  { name: "get_control_structure", description: "Return the current STPA control structure JSON from the editor.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "validate_control_structure", description: "Run structural STPA checks (dangling references, duplicate ids, open control loops, missing process-model variables) on the current structure, or on a supplied one.",
-    inputSchema: { type: "object", properties: { structure: { type: "object", description: "Optional structure to check instead of the editor contents" } }, additionalProperties: false } },
-  { name: "list_control_loops", description: "List each control action with the feedback paths that close its loop and their latency tolerances.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "propose_reconfiguration", description: "Propose a complete replacement control structure. The user must approve it before it is loaded into the editor.",
-    inputSchema: { type: "object", properties: { structure: { type: "object" }, rationale: { type: "string" } }, required: ["structure", "rationale"], additionalProperties: false } },
-];
-
-function listLoops(m) {
-  const name = (id) => [...(m.controllers || []), ...(m.controlled_processes || []), ...(m.actuators || []), ...(m.sensors || [])].find((n) => n.id === id)?.name || id;
-  const { acted, measured } = loopEnds(m);
-  return (m.control_actions || []).map((ca) => ({
-    control_action: ca.id, action: ca.action, controller: name(ca.source), target: name(acted(ca.target)),
-    ...(acted(ca.target) !== ca.target ? { via_actuator: ca.target } : {}),
-    feedback: (m.feedback || []).filter((fb) => fb.target === ca.source && (fb.source === ca.target || measured(fb.source) === acted(ca.target)))
-      .map((fb) => ({ id: fb.id, signal: fb.signal, latency_tolerance_ms: fb.latency_tolerance_ms ?? null,
-        ...(measured(fb.source) !== fb.source ? { via_sensor: fb.source } : {}) })),
-  }));
-}
-
-const toolText = (obj) => ({ content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] });
-
-/** Local JSON-RPC 2.0 dispatcher with MCP method names. Returns a JSON-RPC response object. */
-async function mcpLocalDispatch(req) {
-  const reply = (result) => ({ jsonrpc: "2.0", id: req.id ?? null, result });
-  const fail = (code, message) => ({ jsonrpc: "2.0", id: req.id ?? null, error: { code, message } });
-  if (req.method === "tools/list") return reply({ tools: [...LOCAL_TOOLS, ...mcpRemote.tools] });
-  if (req.method !== "tools/call") return fail(-32601, `Method not found: ${req.method}`);
-
-  const { name, arguments: args = {} } = req.params || {};
-  if (mcpRemote.tools.some((t) => t.name === name)) {
-    try { return reply(await mcpRemote.request("tools/call", { name, arguments: args })); }
-    catch (e) { return fail(-32000, "Remote MCP error: " + e.message); }
-  }
-  const m = currentModel || {};
-  switch (name) {
-    case "get_control_structure": return reply(toolText(m));
-    case "validate_control_structure": return reply(toolText(validateModel(args.structure || m)));
-    case "list_control_loops": return reply(toolText(listLoops(m)));
-    case "propose_reconfiguration": {
-      const check = validateModel(args.structure);
-      if (check.errors.length) return reply({ ...toolText({ accepted: false, errors: check.errors }), isError: true });
-      pendingProposal = { structure: args.structure, rationale: args.rationale || "" };
-      return reply(toolText({ accepted: true, status: "Shown to the user with an Apply button; not applied yet.", warnings: check.warnings }));
-    }
-    default: return fail(-32602, `Unknown tool: ${name}`);
-  }
-}
-
-/** Minimal MCP HTTP+SSE client (see notes above). */
-class McpSseBridge {
-  constructor() { this.tools = []; this.es = null; this.postUrl = null; this.nextId = 1; this.waiting = new Map(); }
-  get connected() { return !!this.postUrl; }
-  connect(sseUrl, timeoutMs = 8000) {
-    this.close();
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.close(); reject(new Error("timed out waiting for the endpoint event")); }, timeoutMs);
-      this.es = new EventSource(sseUrl);
-      this.es.addEventListener("endpoint", async (ev) => {
-        this.postUrl = new URL(ev.data, sseUrl).href;
-        try {
-          await this.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "hfa-stpa-workbench", version: "1.0.0" } });
-          await this.notify("notifications/initialized");
-          this.tools = (await this.request("tools/list", {})).tools || [];
-          clearTimeout(timer); resolve(this.tools);
-        } catch (e) { clearTimeout(timer); this.close(); reject(e); }
-      });
-      this.es.addEventListener("message", (ev) => {
-        let msg; try { msg = JSON.parse(ev.data); } catch { return; }
-        const w = this.waiting.get(msg.id); if (!w) return;
-        this.waiting.delete(msg.id);
-        msg.error ? w.reject(new Error(msg.error.message)) : w.resolve(msg.result);
-      });
-      this.es.onerror = () => { if (!this.postUrl) { clearTimeout(timer); this.close(); reject(new Error("SSE connection failed (check URL and CORS)")); } };
-    });
-  }
-  async post(payload) {
-    const res = await fetch(this.postUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
-    if (!res.ok && res.status !== 202) throw new Error(`HTTP ${res.status}`);
-  }
-  request(method, params) {
-    const id = this.nextId++;
-    const p = new Promise((resolve, reject) => {
-      this.waiting.set(id, { resolve, reject });
-      setTimeout(() => { if (this.waiting.delete(id)) reject(new Error(method + " timed out")); }, 30000);
-    });
-    return this.post({ jsonrpc: "2.0", id, method, params }).then(() => p);
-  }
-  notify(method, params) { return this.post({ jsonrpc: "2.0", method, ...(params ? { params } : {}) }); }
-  close() { this.es?.close(); this.es = null; this.postUrl = null; this.tools = []; this.waiting.clear(); }
-}
-const mcpRemote = new McpSseBridge();
-
-$("mcpConnect").addEventListener("click", async () => {
-  const url = $("mcp_sse_url").value.trim();
-  if (!url) { mcpRemote.close(); $("mcpState").textContent = "local tools only"; return; }
-  $("mcpState").textContent = "connecting…";
-  try { const tools = await mcpRemote.connect(url); $("mcpState").textContent = `connected · ${tools.length} remote tools`; }
-  catch (e) { $("mcpState").textContent = "failed: " + e.message; }
-});
-
-/** Pull a tools/call request out of a ```mcp fenced block, if the reply contains one. */
-function extractToolCall(text) {
-  const m = /```mcp\s*\n([\s\S]*?)```/.exec(text);
-  if (!m) return null;
-  try { const req = JSON.parse(m[1]); return req && req.method ? req : null; } catch { return null; }
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   6. Chat loop, prompts, rendering
-   ═══════════════════════════════════════════════════════════════════════════ */
 const DEFAULT_SYSTEM_PROMPT = `You are an expert safety analyst applying STPA (System-Theoretic Process Analysis, Leveson & Thomas, STPA Handbook) to the hierarchical control structure supplied as JSON.
 
 Method:
@@ -2033,23 +1468,6 @@ Changing the structure: unless the user explicitly asks for the complete structu
 Ids in "remove" are deleted first; then an element whose id already exists is merged into it (only the fields you give change) and a new id is added. Keep existing ids stable so UCAs and links stay valid, and give new elements ids that are not used yet.
 To change an element's type (for example an actuator that should become a controlled process, or a process that should become a sensor), list its id in "remove" and add the complete element with the same id to the new section; its control actions and feedback keep pointing at that id.`;
 
-/** User-turn preamble that scopes a question to the selection; the whole structure is already in the system prompt. */
-function scopePreamble(items) {
-  if (!items.length) return "";
-  const picked = {};
-  items.forEach(({ kind, obj }) => (picked[kind] ||= []).push(obj));
-  return `Analysis scope: I selected these elements in the control structure diagram. Focus on them and on their direct interactions (the control actions and feedback that connect them). Use the rest of the structure only as context; do not analyse unselected elements in depth, and keep any structure change to a patch.\nSelected elements (JSON):\n${JSON.stringify(picked, null, 2)}\n\nQuestion:\n`;
-}
-
-const TOOL_PROMPT = (tools) => `
-
-You can call tools (MCP JSON-RPC). To call one, reply with ONLY a fenced block and nothing else:
-\`\`\`mcp
-{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"<tool>","arguments":{}}}
-\`\`\`
-The result arrives in the next message. Call tools only when they help; the current structure is already included below.
-Available tools (tools/list):
-${JSON.stringify(tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })))}`;
 
 const QUICK_ACTIONS = [
   ["Identify UCAs", "Identify the Unsafe Control Actions for every control action in the current structure, in a table per controller, with hazard links."],
@@ -2060,398 +1478,56 @@ const QUICK_ACTIONS = [
   ["Safety constraints", "Derive controller-level safety constraints from the UCAs, traceable to UCA and hazard ids."],
 ];
 
-let history = [];      // [{ role, content }] of finished questions, sent only when "Send earlier turns" is on
-let busy = null;       // AbortController while a request runs
 
-function buildSystemPrompt() {
-  let sp = (settings.system_prompt || DEFAULT_SYSTEM_PROMPT) + STRUCTURE_PROMPT;
-  if (settings.mcp_enabled) sp += TOOL_PROMPT([...LOCAL_TOOLS, ...mcpRemote.tools]);
-  const errs = lastValidation.errors.length ? `\n\nNote: the editor currently has errors (${lastValidation.errors.join("; ")}); the last valid version is shown.` : "";
-  return `${sp}${errs}\n\nCurrent control structure (JSON):\n${JSON.stringify(currentModel || {}, null, 2)}`;
-}
-
-async function send(userText) {
-  if (busy || !userText.trim()) return;
-  if (!currentModel) { addMessage("error", "Fix the JSON in the editor first — there is no valid structure to analyse."); return; }
-  const scope = selectedItems();
-  addMessage("user", userText, scope.length ? `Scope: ${scope.map((it) => it.id).join(", ")}` : "Scope: whole structure");
-  // Each question carries the structure (system prompt) and its scope; earlier turns only when asked for.
-  const prior = settings.keep_history ? history : [];
-  const turn = [{ role: "user", content: scopePreamble(scope) + userText }];
-  busy = new AbortController();
-  setBusy(true);
-  const provider = settings.provider, model = providerLabel();
-  try {
-    for (let round = 0; ; round++) {
-      setStatus(round ? `Running tool round ${round}…` : `Waiting for ${model}…`);
-      const t0 = performance.now();
-      const { text, usage } = await callLLM({ provider, systemPrompt: buildSystemPrompt(), messages: [...prior, ...turn], signal: busy.signal,
-        onProgress: (n) => setStatus(`Receiving from ${model}… ${n.toLocaleString()} characters`) });
-      turn.push({ role: "assistant", content: text });
-      const call = settings.mcp_enabled ? extractToolCall(text) : null;
-      if (!call || round >= MAX_TOOL_ROUNDS) {
-        const tokens = usage ? ` · ${(usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)} in / ${usage.output_tokens ?? "?"} out tokens` : "";
-        addMessage("assistant", text, `${model} · ${((performance.now() - t0) / 1000).toFixed(1)} s${tokens}`);
-        break;
-      }
-      const response = await mcpLocalDispatch(call);
-      addToolChip(call, response);
-      if (pendingProposal) { addProposal(pendingProposal); pendingProposal = null; }
-      turn.push({ role: "user", content: "MCP tool result (JSON-RPC response):\n```json\n" + JSON.stringify(response) + "\n```" });
-    }
-    history.push(...turn);
-    setStatus("");
-  } catch (e) {
-    addMessage("error", e.name === "AbortError" ? "Request cancelled." : explainError(e));
-    setStatus("");
-  } finally {
-    busy = null; setBusy(false);
-  }
-}
-
-function explainError(e) {
-  let msg = e.message || String(e);
-  if (e instanceof TypeError && /fetch|network/i.test(msg)) {
-    msg += settings.provider === "local"
-      ? "\nCould not reach the local endpoint. Check it is running and allows this origin (Ollama: set OLLAMA_ORIGINS=*; LM Studio: enable CORS)."
-      : "\nNetwork error — check your connection, proxy or browser extensions.";
-  }
-  return msg;
-}
-
-const providerLabel = () => ({
-  claude: settings.claude_model || DEFAULTS.claude_model,
-  gemini: settings.gemini_model || DEFAULTS.gemini_model,
-  local: settings.local_model || DEFAULTS.local_model,
-})[settings.provider];
-
-function setBusy(on) {
-  $("sendBtn").textContent = on ? "Stop" : "Send";
-  $("sendBtn").classList.toggle("primary", !on);
-  document.querySelectorAll("#quick button").forEach((b) => (b.disabled = on));
-}
-const setStatus = (t) => ($("status").textContent = t);
-
-/* ── Safe Markdown → DOM (all text is escaped first; no raw HTML from the model) ── */
-const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-function inline(s) {
-  return esc(s)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
-    .replace(/(^|\W)_([^_\s][^_]*)_(?=\W|$)/g, "$1<em>$2</em>");
-}
-function renderMarkdown(md) {
-  const out = []; const lines = md.replace(/\r\n/g, "\n").split("\n");
-  let i = 0, list = null;
-  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
-  while (i < lines.length) {
-    const line = lines[i];
-    const fence = /^```(\w*)\s*$/.exec(line);
-    if (fence) {
-      closeList();
-      const buf = []; i++;
-      while (i < lines.length && !/^```\s*$/.test(lines[i])) buf.push(lines[i++]);
-      i++;
-      out.push(`<pre data-lang="${esc(fence[1])}"><code>${esc(buf.join("\n"))}</code></pre>`);
-      continue;
-    }
-    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
-      closeList();
-      const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
-      let html = "<table><thead><tr>" + cells(line).map((c) => `<th>${c}</th>`).join("") + "</tr></thead><tbody>";
-      i += 2;
-      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) html += "<tr>" + cells(lines[i++]).map((c) => `<td>${c}</td>`).join("") + "</tr>";
-      out.push(html + "</tbody></table>");
-      continue;
-    }
-    const h = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (h) { closeList(); const lv = Math.min(5, h[1].length + 2); out.push(`<h${lv}>${inline(h[2])}</h${lv}>`); i++; continue; }
-    const li = /^\s*([-*]|\d+[.)])\s+(.*)$/.exec(line);
-    if (li) {
-      const kind = /\d/.test(li[1]) ? "ol" : "ul";
-      if (list !== kind) { closeList(); out.push(`<${kind}>`); list = kind; }
-      out.push(`<li>${inline(li[2])}</li>`); i++; continue;
-    }
-    if (!line.trim()) { closeList(); i++; continue; }
-    closeList();
-    const para = [line]; i++;
-    while (i < lines.length && lines[i].trim() && !/^(```|#{1,6}\s|\s*([-*]|\d+[.)])\s|\s*\|)/.test(lines[i])) para.push(lines[i++]);
-    out.push(`<p>${inline(para.join(" "))}</p>`);
-  }
-  closeList();
-  return out.join("");
-}
-
-const transcript = []; // for Markdown export
-function addMessage(kind, text, meta) {
-  const div = document.createElement("div");
-  div.className = "msg " + kind;
-  if (meta) { const m = document.createElement("div"); m.className = "meta"; m.textContent = meta; div.appendChild(m); }
-  if (kind === "user" || kind === "error") div.appendChild(document.createTextNode(text));
-  else {
-    const body = document.createElement("div");
-    body.className = "body";
-    body.innerHTML = renderMarkdown(text); // safe: renderMarkdown escapes all model text
-    div.appendChild(body);
-    if (kind === "assistant") attachJsonActions(body);
-    if (meta) addFold(div, text);
-  }
-  $("log").appendChild(div);
-  // An answer opens at its first line; questions, errors and tool rows sit at the bottom.
-  div.scrollIntoView({ block: kind === "assistant" ? "start" : "end", behavior: "smooth" });
-  transcript.push({ kind, text, meta });
-  updateToBottom();
-}
-
-/** The caret after an answer's meta line folds the answer to one line of its text; the line or the caret opens it again. */
-function addFold(div, text) {
-  const btn = document.createElement("button");
-  btn.type = "button"; btn.className = "fold";
-  const gist = document.createElement("div");
-  gist.className = "gist";
-  gist.textContent = text.replace(/```[\s\S]*?```/g, " [code] ").replace(/[#*_`|>]+|:?-{3,}:?/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
-  btn.addEventListener("click", () => setFolded(div, !div.classList.contains("folded")));
-  gist.addEventListener("click", () => setFolded(div, false));
-  div.querySelector(".meta").appendChild(btn);
-  div.querySelector(".body").before(gist);
-  setFolded(div, false);
-}
-function setFolded(div, folded) {
-  const btn = div.querySelector(".meta .fold");
-  div.classList.toggle("folded", folded);
-  btn.textContent = folded ? "▸" : "▾";
-  btn.title = folded ? "Show the answer" : "Hide the answer";
-  btn.setAttribute("aria-label", btn.title);
-  btn.setAttribute("aria-expanded", String(!folded));
-  updateToBottom();
-}
-/** Compress / Expand above the log fold or open every answer that has a caret. */
-const foldAll = (folded) => document.querySelectorAll("#log .msg:has(> .meta .fold)").forEach((div) => setFolded(div, folded));
-$("foldAll").addEventListener("click", () => foldAll(true));
-$("unfoldAll").addEventListener("click", () => foldAll(false));
-
-/** ↓ shows while the log is scrolled up from its latest entry. */
-function updateToBottom() {
-  const log = $("log");
-  $("toBottom").hidden = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-}
-$("log").addEventListener("scroll", updateToBottom, { passive: true });
-$("toBottom").addEventListener("click", () => $("log").scrollTo({ top: $("log").scrollHeight, behavior: "smooth" }));
-
-/** One collapsed row per tool call; the request and response stay one click away. */
-function addToolChip(call, response) {
-  const name = call.params?.name || call.method;
-  const failed = !!response.error || !!response.result?.isError;
-  const json = JSON.stringify({ request: call, response }, null, 2);
-  const det = document.createElement("details");
-  det.className = "tool-chip" + (failed ? " err" : "");
-  const sum = document.createElement("summary");
-  sum.textContent = `MCP ${name} · ${failed ? "failed" : "ok"}`;
-  const pre = document.createElement("pre");
-  pre.textContent = json;
-  det.append(sum, pre);
-  $("log").appendChild(det);
-  det.scrollIntoView({ block: "end", behavior: "smooth" });
-  updateToBottom();
-  transcript.push({ kind: "tool", text: "```json\n" + json + "\n```", meta: `MCP ${name}` });
-}
-
-function setToolsHidden(hide) {
-  $("log").classList.toggle("hide-tools", hide);
-  $("toolsBtn").textContent = hide ? "Show tool calls" : "Hide tool calls";
-  store.set("hideTools", hide);
-}
-$("toolsBtn").addEventListener("click", () => setToolsHidden(!$("log").classList.contains("hide-tools")));
-
-/** Turn a ```json control structure (or structure patch) in a reply into a card: actions on top, the JSON folded below. */
-function attachJsonActions(body) {
-  body.querySelectorAll('pre[data-lang="json"]').forEach((pre) => {
-    let obj; try { obj = JSON.parse(pre.textContent); } catch { return; }
-    if (!obj || typeof obj !== "object") return;
-    const isPatch = obj.patch === true;
-    if (!isPatch && !Array.isArray(obj.controllers)) return;
-    const card = document.createElement("div");
-    card.className = "struct-card";
-    const head = document.createElement("div");
-    head.className = "head";
-    const title = document.createElement("strong");
-    const copy = document.createElement("button");
-    copy.textContent = "Copy JSON";
-    copy.addEventListener("click", async () => {
-      try { await navigator.clipboard.writeText(JSON.stringify(obj, null, 2)); copy.textContent = "Copied"; }
-      catch { copy.textContent = "Copy failed"; }
-    });
-    const load = document.createElement("button");
-    if (isPatch) {
+window.STPAAssist = HFAAssist.mount({
+  id: "stpa",
+  title: "STPA analysis",
+  subject: "the control structure",
+  toolbar: document.querySelector("header .row"),
+  systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  schemaPrompt: () => STRUCTURE_PROMPT + (lastValidation.errors.length
+    ? `\n\nNote: the editor currently has errors (${lastValidation.errors.join("; ")}); the last valid version is shown.` : ""),
+  contextLabel: "Current control structure (JSON)",
+  getContext: () => currentModel || {},
+  getScope: () => {
+    const items = selectedItems();
+    if (!items.length) return null;
+    const picked = {};
+    items.forEach(({ kind, obj }) => (picked[kind] ||= []).push(obj));
+    return { label: items.map((it) => it.id).join(", "), items: picked };
+  },
+  quickActions: QUICK_ACTIONS,
+  inspect: (obj) => {
+    if (obj.patch === true) {
       const n = (k) => (Array.isArray(obj[k]) ? obj[k].length : 0);
       const parts = STRUCT_KEYS.filter(n).map((k) => `${n(k)} ${k.replace(/_/g, " ")}`);
       if (n("remove")) parts.push(`remove ${obj.remove.join(", ")}`);
-      title.textContent = `Structure patch · ${parts.join(", ") || "no changes"}`;
-      load.textContent = "Apply to editor";
-      load.title = "Merge into the current structure by id (Ctrl/⌘+Z in the editor undoes it)";
-      load.addEventListener("click", () => {
-        if (!currentModel) return;
-        const { model, stats } = applyPatch(currentModel, obj);
-        const errs = validateModel(model).errors;
-        if (errs.length && !confirm(`The merged structure has ${errs.length} error(s):\n\n${errs.slice(0, 8).join("\n")}\n\nApply anyway?`)) return;
-        replaceEditor(model);
-        load.textContent = "Applied";
-        setStatus(`Patch applied: ${stats.added} added, ${stats.changed} changed, ${stats.removed} removed.`);
-      });
-    } else {
-      const check = validateModel(obj);
-      title.textContent = `Control structure · ${(obj.controllers || []).length} controllers, ${(obj.control_actions || []).length} actions, ${(obj.feedback || []).length} feedback`;
-      load.textContent = check.errors.length ? `Load anyway (${check.errors.length} errors)` : "Load into editor";
-      load.addEventListener("click", () => { if (confirm("Replace the editor contents with this structure? (Save first if you want to keep the current one.)")) setEditor(obj); });
+      return { title: `Structure patch · ${parts.join(", ") || "no changes"}`, applyLabel: "Apply to editor" };
     }
-    head.append(title, copy, load);
-    const details = document.createElement("details");
-    const sum = document.createElement("summary");
-    sum.textContent = "Show JSON";
-    pre.before(card);
-    details.append(sum, pre);
-    card.append(head, details);
-  });
-}
-
-function addProposal({ structure, rationale }) {
-  addMessage("assistant", `**Proposed reconfiguration** — ${rationale}\n\n\`\`\`json\n${JSON.stringify(structure, null, 2)}\n\`\`\``, "propose_reconfiguration");
-}
-
-function renderQuick() {
-  const q = $("quick"); q.replaceChildren();
-  QUICK_ACTIONS.forEach(([label, prompt]) => {
-    const b = document.createElement("button");
-    b.textContent = label; b.title = prompt;
-    b.addEventListener("click", () => send(prompt));
-    q.appendChild(b);
-  });
-}
-
-$("chat").addEventListener("submit", (e) => {
-  e.preventDefault();
-  if (busy) { busy.abort(); return; }
-  const t = $("prompt").value; $("prompt").value = ""; send(t);
-});
-// Enter sends, Shift+Enter gives a new line (design principle 4.6). Nothing is sent from an empty field,
-// while a reply is running (only Stop ends it) or while an input method (IME) is composing.
-$("prompt").addEventListener("keydown", (e) => {
-  if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.keyCode === 229) return;
-  e.preventDefault();
-  if (!busy && $("prompt").value.trim()) $("chat").requestSubmit();
-});
-$("clearBtn").addEventListener("click", () => { if (busy) busy.abort(); history = []; transcript.length = 0; $("log").replaceChildren(); setStatus(""); updateToBottom(); });
-$("saveLogBtn").addEventListener("click", () => {
-  const md = [`# STPA analysis — ${currentModel?.system || "untitled"}`, "", `_Exported ${new Date().toISOString()} · ${providerLabel()}_`, "",
-    "## Control structure", "", "```json", JSON.stringify(currentModel, null, 2), "```", "",
-    ...transcript.map((t) => t.kind === "user" ? `## ▶ ${t.text}\n` : `${t.meta ? `_${t.meta}_\n\n` : ""}${t.text}\n`)].join("\n");
-  download("stpa-analysis.md", md, "text/markdown");
+    if (!Array.isArray(obj.controllers)) return null;
+    const errors = validateModel(obj).errors.length;
+    return { title: `Control structure · ${(obj.controllers || []).length} controllers, ${(obj.control_actions || []).length} actions, ${(obj.feedback || []).length} feedback`,
+      applyLabel: errors ? `Load anyway (${errors} errors)` : "Load into editor",
+      confirm: "Replace the editor contents with this structure? (Undo in the editor restores the current one.)" };
+  },
+  apply: (obj) => {
+    if (obj.patch === true) {
+      if (!currentModel) throw new Error("Fix the JSON in the editor first.");
+      const { model, stats } = applyPatch(currentModel, obj);
+      const errs = validateModel(model).errors;
+      if (errs.length && !confirm(`The merged structure has ${errs.length} error(s):\n\n${errs.slice(0, 8).join("\n")}\n\nApply anyway?`)) return false;
+      replaceEditor(model);
+      return `Patch applied: ${stats.added} added, ${stats.changed} changed, ${stats.removed} removed. Ctrl/⌘+Z in the editor undoes it.`;
+    }
+    replaceEditor(obj);
+    return "Structure loaded. Ctrl/⌘+Z in the editor undoes it.";
+  },
+  snapshot: () => $("editor").value,
+  restore: (text) => setEditor(text),
+  welcome: "Edit the control structure (or load a preset), pick a provider in **Settings…**, then use a quick action or ask a question. The current structure is sent with every request; select elements in the diagram to focus on them.",
+  exportName: "stpa-analysis",
 });
 
-/* ── Settings ──────────────────────────────────────────────────────────── */
-const SETTING_FIELDS = ["provider", "claude_key", "claude_model", "claude_max_tokens", "claude_effort", "claude_fallbacks", "gemini_key", "gemini_model",
-  "local_endpoint", "local_model", "local_key", "mcp_enabled", "mcp_sse_url", "system_prompt", "remember_keys", "keep_history"];
-const SECRET_FIELDS = ["claude_key", "gemini_key", "local_key"];
-let settings = {};
-
-function loadSettings() {
-  const saved = store.get("settings", {});
-  settings = { provider: "claude", claude_model: DEFAULTS.claude_model, claude_max_tokens: DEFAULTS.claude_max_tokens, claude_effort: "medium", claude_fallbacks: true,
-    gemini_model: DEFAULTS.gemini_model, local_endpoint: DEFAULTS.local_endpoint, local_model: DEFAULTS.local_model,
-    mcp_enabled: true,
-    system_prompt: DEFAULT_SYSTEM_PROMPT, remember_keys: true, ...saved };
-  SETTING_FIELDS.forEach((k) => {
-    const el = $(k); if (!el) return;
-    if (el.type === "checkbox") el.checked = !!settings[k]; else el.value = settings[k] ?? "";
-  });
-  updateBadge();
-}
-function saveSettings() {
-  SETTING_FIELDS.forEach((k) => { const el = $(k); settings[k] = el.type === "checkbox" ? el.checked : el.value.trim(); });
-  settings.system_prompt = $("system_prompt").value; // keep formatting
-  const persisted = { ...settings };
-  if (!settings.remember_keys) SECRET_FIELDS.forEach((k) => delete persisted[k]);
-  store.set("settings", persisted);
-  updateBadge();
-}
-/* Models the active provider reported via listModels(); null until fetched (or when the fetch failed). */
-const fetchedModels = { claude: null, gemini: null, local: null };
-let modelsSeq = 0;
-async function refreshModels() {
-  const p = settings.provider, seq = ++modelsSeq;
-  $("modelsState").textContent = "loading models…";
-  try {
-    const list = await listModels(p);
-    if (seq !== modelsSeq) return;
-    fetchedModels[p] = list;
-    $("modelsState").textContent = `${list.length} models from provider`;
-  } catch (e) {
-    if (seq !== modelsSeq) return;
-    fetchedModels[p] = null;
-    $("modelsState").textContent = p === "local" ? "model list unavailable" : "built-in model list";
-    $("modelsState").title = e.message;
-  }
-  updateBadge();
-}
-
-/** Fill the model picker beside Send for the current provider: the provider's own list when it could be fetched,
-    else the built-in list. A custom id from Settings is kept as an extra entry. */
-function updateBadge() {
-  const pick = $("modelPick"), p = settings.provider, cur = providerLabel();
-  document.querySelectorAll("#drawer fieldset[data-provider]").forEach((fs) => fs.classList.toggle("active", fs.dataset.provider === p));
-  $("providerPill").textContent = $("provider").selectedOptions[0]?.text.replace(/ \(.*\)$/, "") || p;
-  pick.replaceChildren();
-  const fetched = fetchedModels[p];
-  if (fetched) {
-    const groups = p === "claude" ? [...new Set(fetched.map((m) => CLAUDE_MODELS.find((x) => x.id === m.id)?.family || "Other"))] : [null];
-    groups.forEach((fam) => {
-      const parent = fam && groups.length > 1 ? pick.appendChild(Object.assign(document.createElement("optgroup"), { label: fam })) : pick;
-      fetched.filter((m) => !fam || (CLAUDE_MODELS.find((x) => x.id === m.id)?.family || "Other") === fam)
-        .forEach((m) => parent.appendChild(new Option(m.label === m.id ? m.id : `${m.label} (${m.id})`, m.id)));
-    });
-  } else if (p === "claude") {
-    [...new Set(CLAUDE_MODELS.map((x) => x.family))].forEach((fam) => {
-      const og = document.createElement("optgroup");
-      og.label = fam;
-      CLAUDE_MODELS.filter((x) => x.family === fam).forEach((x) => og.appendChild(new Option(`${x.label} (${x.id})`, x.id)));
-      pick.appendChild(og);
-    });
-  } else if (p === "gemini") GEMINI_MODELS.forEach((id) => pick.appendChild(new Option(id, id)));
-  if (![...pick.options].some((o) => o.value === cur)) pick.appendChild(new Option(p === "local" ? cur : `${cur} (custom)`, cur));
-  pick.value = cur;
-  const dl = $(p + "Models");
-  if (dl && fetched) dl.replaceChildren(...fetched.map((m) => new Option(m.label, m.id)));
-}
-$("modelPick").addEventListener("change", (e) => {
-  const field = $(settings.provider + "_model");
-  field.value = e.target.value;
-  saveSettings();
-});
-CLAUDE_MODELS.forEach((x) => $("claudeModels").appendChild(new Option(x.label, x.id)));
-// Browsers only suggest datalist entries matching the field's text, so a filled-in model field would hide every
-// other model. Empty the field while it has focus (current id shown as placeholder) and restore it if nothing is picked.
-["claude_model", "gemini_model", "local_model"].forEach((k) => {
-  const el = $(k);
-  el.addEventListener("focus", () => { el.dataset.prev = el.value; el.dataset.ph = el.placeholder; el.placeholder = el.value || el.placeholder; el.value = ""; });
-  el.addEventListener("blur", () => { if (!el.value.trim() && el.dataset.prev) { el.value = el.dataset.prev; saveSettings(); } el.placeholder = el.dataset.ph || ""; });
-});
-
-SETTING_FIELDS.forEach((k) => $(k)?.addEventListener("change", saveSettings));
-// A new provider, key or endpoint can change which models are on offer.
-["provider", "claude_key", "gemini_key", "local_endpoint", "local_key"].forEach((k) => $(k).addEventListener("change", () => {
-  if (k === "provider" || k.startsWith(settings.provider + "_")) refreshModels();
-}));
-$("refreshModels").addEventListener("click", refreshModels);
-$("forgetKeys").addEventListener("click", () => {
-  SECRET_FIELDS.forEach((k) => { $(k).value = ""; }); saveSettings(); setStatus("Stored API keys removed.");
-});
-$("resetPrompt").addEventListener("click", () => { $("system_prompt").value = DEFAULT_SYSTEM_PROMPT; saveSettings(); });
-
-const drawer = $("drawer");
-const openDrawer = (open) => { drawer.classList.toggle("open", open); drawer.setAttribute("aria-hidden", String(!open)); if (open) drawer.querySelector("input,select")?.focus(); };
-$("settingsBtn").addEventListener("click", () => openDrawer(!drawer.classList.contains("open")));
-$("closeDrawer").addEventListener("click", () => openDrawer(false));
 const expandDiagram = (on) => {
   $("diagramPane").classList.toggle("full", on);
   $("expandBtn").textContent = on ? "Close" : "Full page";
@@ -2460,9 +1536,9 @@ const expandDiagram = (on) => {
 $("expandBtn").addEventListener("click", () => expandDiagram(!$("diagramPane").classList.contains("full")));
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (drawer.classList.contains("open")) openDrawer(false);
-  else expandDiagram(false);
+  expandDiagram(false);
 });
+
 
 $("themeBtn").addEventListener("click", () => {
   const dark = document.documentElement.dataset.theme
@@ -2475,19 +1551,13 @@ $("themeBtn").addEventListener("click", () => {
 /* ── Boot ─────────────────────────────────────────────────────────────── */
 (function boot() {
   const theme = store.get("theme"); if (theme) document.documentElement.dataset.theme = theme;
-  loadSettings();
-  refreshModels();
-  renderQuick();
-  setToolsHidden(!!store.get("hideTools"));
   applyViews();
-  setSplit(split);
   ["scLosses", "scHazards", "scUcas", "scConstraints", "stBlocks", "stCas", "stFbs"].forEach((id) => {
     const el = $(id), saved = store.get("open:" + id);
     if (saved !== null) el.open = saved;
     el.addEventListener("toggle", () => store.set("open:" + id, el.open));
   });
   setEditor(store.get("structure") || PRESETS["Autonomous Emergency Braking (AEB)"]);
-  addMessage("assistant", "Edit the control structure on the left (or load a preset), pick a provider in **Settings**, then use a quick action or ask a question. The current structure is sent with every request.");
 })();
 </script>
 </body>
