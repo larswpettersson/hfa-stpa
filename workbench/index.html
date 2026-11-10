@@ -159,6 +159,7 @@
   #diagram [data-id], #diagram [data-ids], #diagram [data-sel] { cursor: pointer; }
   #selBar { display: flex; gap: 6px; row-gap: 4px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--fg-muted); padding: 4px 10px 6px; border-top: 1px solid var(--border); }
   #selBar button { padding: 2px 8px; font-size: 12px; }
+  #selBar .selcmds { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; width: 100%; }
   .selchip { display: inline-flex; align-items: center; gap: 2px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px; padding: 0 2px 0 8px; color: var(--fg); }
   .selchip button { border: 0; background: none; padding: 0 5px; font-size: 12px; line-height: 18px; color: var(--fg-muted); }
   .tables { border-top: 1px solid var(--border); max-height: 32vh; overflow: auto; }
@@ -203,6 +204,7 @@
 <header>
   <h1><span class="mark"></span>HFA STPA Workbench</h1>
   <div class="cmds">
+    <button id="newBtn" title="Replace the analysis with a new control structure: one controller and one controlled process">New</button>
     <button id="importBtn" title="Open a .json file">Open…</button>
     <button id="exportBtn" title="Save the structure as a JSON file">Save</button>
     <button id="undoBtn" title="Undo the last change to the structure (also from the tables and conversions)">Undo</button>
@@ -336,7 +338,7 @@ const $ = (id) => document.getElementById(id);
      controlled_processes[{id,name,states[]}],
      control_actions[{id,source,target,action,parameters[]}]   (action: a label or a list of labels),
      feedback[{id,source,target,signal,latency_tolerance_ms?}]   (signal: a label or a list of labels),
-     actuators[{id,name,target,actuation?,converted_from?}]   (target: a controlled process),
+     actuators[{id,name,target,actuation?,converted_from?}]   (target: the block it acts on, a controller or a controlled process),
      sensors[{id,name,source,measures?,converted_from?}]       (source: a controlled process)
    A control action may target another controller (hierarchical structures) or an
    actuator; feedback may come from a sensor. The actuator then acts on its target
@@ -503,12 +505,12 @@ function validateModel(m) {
   const isNode = (id) => ["controllers", "controlled_processes", "actuators", "sensors"].includes(ids.get(id));
   actuators.forEach((a) => {
     if (!a || !a.id) return;
-    if (!isProc(a.target)) errors.push(`Actuator ${a.id}: target "${a.target}" is not a controlled process`);
+    if (!isProc(a.target) && !isCtrl(a.target)) errors.push(`Actuator ${a.id}: target "${a.target}" is not a controller or a controlled process`);
     if (!cas.some((ca) => ca && ca.target === a.id)) warnings.push(`Actuator "${a.name || a.id}" receives no control actions`);
   });
   sensors.forEach((s) => {
     if (!s || !s.id) return;
-    if (!isProc(s.source)) errors.push(`Sensor ${s.id}: source "${s.source}" is not a controlled process`);
+    if (!isProc(s.source) && !isCtrl(s.source)) errors.push(`Sensor ${s.id}: source "${s.source}" is not a controller or a controlled process`);
     if (!fbs.some((fb) => fb && fb.source === s.id)) warnings.push(`Sensor "${s.name || s.id}" sends no feedback`);
   });
   cas.forEach((ca) => {
@@ -937,23 +939,28 @@ function applySelection() {
       chip.appendChild(x);
       bar.appendChild(chip);
     });
-    const procIds = new Set((currentModel.controlled_processes || []).map((p) => p && p.id));
-    const caOk = items.filter((it) => it.kind === "control_actions" && procIds.has(it.obj.target));
-    const fbOk = items.filter((it) => it.kind === "feedback" && procIds.has(it.obj.source));
-    const blocks = items.filter((it) => it.kind in BLOCK_KINDS);
-    const sw = document.createElement("select");
-    sw.title = "Change the type of the selected process blocks; their ids, names and links stay";
-    sw.setAttribute("aria-label", "Switch the selected blocks to another type");
-    sw.disabled = !blocks.length;
-    sw.appendChild(new Option("Switch to…", ""));
-    for (const k in BLOCK_KINDS) sw.appendChild(new Option(BLOCK_KINDS[k].toLowerCase(), k));
-    sw.addEventListener("change", () => { if (sw.value) switchSelected(sw.value); });
-    bar.append(
-      btn("Convert to actuator", "Insert an actuator between each selected control action and the process it acts on", () => convertSelected("actuator"), !caOk.length),
-      btn("Convert to sensor", "Insert a sensor between the process and each selected feedback", () => convertSelected("sensor"), !fbOk.length),
-      sw,
-      btn("Clear", "Clear the selection (analyse the whole structure)", () => setSelection([])));
   }
+  // Convert applies to every control action and feedback, whichever blocks they connect (STPA-LINK-3 to 5); the buttons are always there.
+  const blockIds = new Set([...(currentModel?.controllers || []), ...(currentModel?.controlled_processes || [])].map((p) => p && p.id));
+  const caOk = items.filter((it) => it.kind === "control_actions" && blockIds.has(it.obj.target));
+  const fbOk = items.filter((it) => it.kind === "feedback" && blockIds.has(it.obj.source));
+  const blocks = items.filter((it) => it.kind in BLOCK_KINDS);
+  const sw = document.createElement("select");
+  sw.title = "Change the type of the selected process blocks; their ids, names and links stay";
+  sw.setAttribute("aria-label", "Switch the selected blocks to another type");
+  sw.disabled = !blocks.length;
+  sw.appendChild(new Option("Switch to…", ""));
+  for (const k in BLOCK_KINDS) sw.appendChild(new Option(BLOCK_KINDS[k].toLowerCase(), k));
+  sw.addEventListener("change", () => { if (sw.value) switchSelected(sw.value); });
+  const row = document.createElement("div");
+  row.className = "selcmds";
+  row.append(
+    btn("Convert to actuator", caOk.length ? "Insert an actuator on each selected control action" : "Select a control action first: a control action is converted to an actuator block", () => convertSelected("actuator"), !caOk.length),
+    btn("Convert to sensor", fbOk.length ? "Insert a sensor on each selected feedback" : "Select a feedback first: a feedback is converted to a sensor block", () => convertSelected("sensor"), !fbOk.length),
+    sw,
+    btn("Delete", "Delete the selected objects and their links (Delete)", deleteSelected, !items.length),
+    btn("Clear", "Clear the selection (analyse the whole structure)", () => setSelection([]), !items.length));
+  bar.appendChild(row);
 }
 
 /* Selection holds one kind of object (5.5): blocks, control actions or feedback. A click selects; Shift/Ctrl/⌘+click
@@ -1026,15 +1033,15 @@ function nextId(m, prefix) {
 }
 function convertSelected(to) {
   const m = structuredClone(currentModel), done = [], next = new Set(selection);
-  const procIds = new Set((m.controlled_processes || []).map((p) => p && p.id));
+  const blockIds = new Set([...(m.controllers || []), ...(m.controlled_processes || [])].map((p) => p && p.id));
   selectedItems(m).forEach(({ kind, obj }) => {
-    if (to === "actuator" && kind === "control_actions" && procIds.has(obj.target)) {
+    if (to === "actuator" && kind === "control_actions" && blockIds.has(obj.target)) {
       const id = nextId(m, "a");
       (m.actuators ||= []).push({ id, name: `${labelText(obj.action) || obj.id} actuator`, target: obj.target, actuation: "", converted_from: obj.id });
       obj.target = id;
       next.delete(obj.id); next.add(id); done.push(`${obj.id} → actuator ${id}`);
     }
-    if (to === "sensor" && kind === "feedback" && procIds.has(obj.source)) {
+    if (to === "sensor" && kind === "feedback" && blockIds.has(obj.source)) {
       const id = nextId(m, "s");
       (m.sensors ||= []).push({ id, name: `${labelText(obj.signal) || obj.id} sensor`, source: obj.source, measures: "", converted_from: obj.id });
       obj.source = id;
@@ -1106,6 +1113,15 @@ function deleteSelected() {
   }, `Deleted ${ids.join(", ")} with their links.`);
   setSelection([]);
 }
+$("newBtn").addEventListener("click", () => {
+  if (!confirm("New replaces the analysis with a controller and a controlled process. Undo (Ctrl/⌘+Z) brings the old one back.")) return;
+  setEditor({ system: "New analysis", controllers: [{ id: "c1", name: "Controller", process_model: { variables: [], assumptions: [] } }],
+    controlled_processes: [{ id: "p1", name: "Controlled process", states: [] }],
+    control_actions: [{ id: "ca1", source: "c1", target: "p1", action: "" }], feedback: [{ id: "fb1", source: "p1", target: "c1", signal: "" }] });
+  setSelection([]);
+  window.STPAAssist?.clear?.();
+  setStatus("New analysis. Undo (Ctrl/⌘+Z) brings the old one back.");
+});
 $("helpBtn").addEventListener("click", () => $("helpDlg").showModal());
 /* The drag bar between the control structure and the tables (4.11): drag, or ←/→ when it has focus. */
 (function dragBar() {
