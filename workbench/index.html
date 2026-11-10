@@ -96,6 +96,7 @@
      body rendered at zero height, so the JSON editor can still take focus for undoable edits. */
   .view { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 120px; border-top: 1px solid var(--border); }
   .view:first-child { border-top: 0; }
+  .view[hidden] { display: none; }
   .view > .vbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; background: var(--bg-elev); }
   .view > .vbar .vtitle { margin-right: auto; border: 0; background: none; padding: 2px 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-muted); }
   .view > .vbar .vtitle::before { content: "▾ "; font-weight: 400; }
@@ -204,14 +205,13 @@
     <div class="bar">
       <h2>Control structure</h2>
       <button id="helpBtn" type="button" aria-label="Help – Keyboard shortcuts" aria-keyshortcuts="?" title="Help – Keyboard shortcuts (?)">?</button>
-      <button id="formatBtn" title="Pretty-print JSON">Format</button>
       <button id="importBtn" title="Open a .json file">Open…</button>
       <button id="exportBtn" title="Save the structure as a JSON file">Save</button>
       <button id="undoBtn" title="Undo the last change to the structure (also from the tables and conversions)">Undo</button>
       <input type="file" id="fileInput" accept=".json,application/json" hidden>
     </div>
     <div class="pbody">
-      <section class="view" id="vJson" aria-label="JSON">
+      <section class="view" id="vJson" aria-label="JSON" hidden>
         <div class="vbar"><button class="vtitle" type="button">JSON</button></div>
         <div class="vbody"><textarea id="editor" spellcheck="false" aria-label="STPA JSON"></textarea></div>
       </section>
@@ -1030,7 +1030,7 @@ function convertSelected(to) {
   if (!done.length) return;
   replaceEditor(m);
   setSelection(next);
-  setStatus(`Converted ${done.join(", ")}. Ctrl/⌘+Z in the editor undoes it.`);
+  setStatus(`Converted ${done.join(", ")}. Undo (Ctrl/⌘+Z) reverts it.`);
 }
 
 /* Add Below (design-stpa.md, STPA-ADD): a new controlled process under each selected controller or process,
@@ -1098,7 +1098,7 @@ $("addBesideBtn").addEventListener("click", addBeside);
 /* Bare letter keys are shortcuts only when no text is being edited. */
 document.addEventListener("keydown", (e) => {
   if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, dialog, [contenteditable]")) return;
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); $("undoBtn").click(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); stepHistory(e.shiftKey ? 1 : -1); return; }
   if (e.ctrlKey || e.metaKey) return;
   const k = e.key.toLowerCase();
   if (e.key === "?") { e.preventDefault(); $("helpDlg").showModal(); return; }
@@ -1465,31 +1465,33 @@ function applyViews() {
   VIEW_IDS.forEach((id) => {
     const v = $(id), st = viewState[id] || {};
     v.classList.toggle("compressed", !!st.compressed);
-    v.classList.toggle("expanded", !!st.expanded);
     v.querySelector(".vtitle").setAttribute("aria-expanded", String(!st.compressed));
-    v.querySelector(".vcomp").setAttribute("aria-pressed", String(!!st.compressed));
-    v.querySelector(".vexp").setAttribute("aria-pressed", String(!!st.expanded));
   });
 }
 VIEW_IDS.forEach((id) => {
-  const bar = $(id).querySelector(".vbar"), name = bar.querySelector(".vtitle").textContent;
-  const mk = (cls, text, title, onClick) => {
-    const b = document.createElement("button");
-    b.type = "button"; b.className = cls; b.textContent = text; b.title = title;
-    b.addEventListener("click", onClick);
-    bar.appendChild(b);
-  };
-  bar.querySelector(".vtitle").title = `Compress or show ${name}`;
-  bar.querySelector(".vtitle").addEventListener("click", () => setView(id, { compressed: !viewState[id]?.compressed }));
-  mk("vcomp", "Compress", `Compress ${name} to its bar (press again to show it)`, () => setView(id, { compressed: !viewState[id]?.compressed }));
-  mk("vexp", "Expand", `Let ${name} take the free height (press again to restore)`, () => setView(id, { expanded: !viewState[id]?.expanded }));
+  const title = $(id).querySelector(".vbar .vtitle");
+  title.title = `Close or open ${title.textContent}`;
+  title.addEventListener("click", () => setView(id, { compressed: !viewState[id]?.compressed }));
 });
 
-$("undoBtn").addEventListener("click", () => {
-  const ed = $("editor");
-  ed.focus({ preventScroll: true });
-  if (document.execCommand("undo")) { clearTimeout(editTimer); refreshEditor(); }
-});
+/* Undo and redo keep their own history of the structure text, because the JSON editor is not shown and a hidden
+   textarea has no undo of its own. Every change that reaches refreshEditor is one step. */
+const undoLog = { texts: [], at: -1, applying: false };
+function recordHistory(text) {
+  if (undoLog.applying || undoLog.texts[undoLog.at] === text) return;
+  undoLog.texts.length = undoLog.at + 1;
+  undoLog.texts.push(text);
+  if (undoLog.texts.length > 200) undoLog.texts.shift();
+  undoLog.at = undoLog.texts.length - 1;
+}
+function stepHistory(by) {
+  const to = undoLog.at + by;
+  if (to < 0 || to >= undoLog.texts.length) return;
+  undoLog.at = to;
+  undoLog.applying = true;
+  try { $("editor").value = undoLog.texts[to]; clearTimeout(editTimer); refreshEditor(); } finally { undoLog.applying = false; }
+}
+$("undoBtn").addEventListener("click", () => stepHistory(-1));
 
 /* ── Editor wiring ───────────────────────────────────────────────────────── */
 let currentModel = null;      // last structure that parsed without errors
@@ -1498,6 +1500,7 @@ let lastValidation = { errors: [], warnings: [] };
 function refreshEditor() {
   const text = $("editor").value;
   store.set("structure", text);
+  recordHistory(text);
   const issues = $("issues");
   issues.replaceChildren();
   const add = (cls, msg) => { const d = document.createElement("div"); d.className = cls; d.textContent = msg; issues.appendChild(d); };
@@ -1517,7 +1520,7 @@ function refreshEditor() {
   }
 }
 function setEditor(obj) { $("editor").value = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); refreshEditor(); }
-/** Like setEditor, but as an edit the browser can undo (Ctrl/⌘+Z in the editor). */
+/** Like setEditor, but as an edit that Undo (Ctrl/⌘+Z) can revert. */
 function replaceEditor(obj) {
   const ed = $("editor"), back = document.activeElement, text = JSON.stringify(obj, null, 2);
   ed.focus({ preventScroll: true }); ed.select();
@@ -1567,7 +1570,6 @@ $("preset").addEventListener("change", (e) => {
   const name = e.target.value; e.target.value = "";
   if (name && confirm(`Replace the editor contents with "${name}"?`)) setEditor(PRESETS[name]);
 });
-$("formatBtn").addEventListener("click", () => { const { model } = parseModel($("editor").value); if (model) setEditor(model); });
 $("exportBtn").addEventListener("click", () => {
   const name = (currentModel?.system || "stpa").replace(/[^\w-]+/g, "_").slice(0, 60);
   download(`${name}.json`, $("editor").value, "application/json");
@@ -1676,10 +1678,10 @@ window.STPAAssist = HFAAssist.mount({
       const errs = validateModel(model).errors;
       if (errs.length && !confirm(`The merged structure has ${errs.length} error(s):\n\n${errs.slice(0, 8).join("\n")}\n\nApply anyway?`)) return false;
       replaceEditor(model);
-      return `Patch applied: ${stats.added} added, ${stats.changed} changed, ${stats.removed} removed. Ctrl/⌘+Z in the editor undoes it.`;
+      return `Patch applied: ${stats.added} added, ${stats.changed} changed, ${stats.removed} removed. Undo (Ctrl/⌘+Z) reverts it.`;
     }
     replaceEditor(obj);
-    return "Structure loaded. Ctrl/⌘+Z in the editor undoes it.";
+    return "Structure loaded. Undo (Ctrl/⌘+Z) reverts it.";
   },
   snapshot: () => $("editor").value,
   restore: (text) => setEditor(text),
