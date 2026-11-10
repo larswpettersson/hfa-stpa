@@ -126,10 +126,10 @@
   #diagram .ctrl rect { fill: var(--bg-elev); stroke: var(--brand); }
   #diagram .proc rect { fill: var(--bg-sunken); stroke: var(--fg-muted); }
   #diagram .act rect, #diagram .sens rect { fill: var(--bg-elev); stroke: var(--fg); stroke-width: 1; }
-  #diagram .node[data-sel]:hover rect, #diagram path[data-sel]:hover, #diagram text[data-sel]:hover,
+  #diagram .node.ind rect, #diagram path.ind, #diagram text.ind,
   #diagram .node.editing rect, #diagram path.editing, #diagram text.editing { filter: drop-shadow(4px 4px 4px var(--shadow-hover)); }
   #diagram .node.sel rect, #diagram path.sel, #diagram text.sel { filter: url(#sel-halo); }
-  #diagram .node.sel[data-sel]:hover rect, #diagram path.sel:hover, #diagram text.sel:hover { filter: url(#sel-halo) drop-shadow(4px 4px 4px var(--shadow-hover)); }
+  #diagram .node.sel.ind rect, #diagram path.sel.ind, #diagram text.sel.ind { filter: url(#sel-halo) drop-shadow(4px 4px 4px var(--shadow-hover)); }
   #diagram text { fill: var(--fg); font: 12px var(--font); }
   #diagram .sub { fill: var(--fg-muted); font-size: 10.5px; }
   #diagram .ca { stroke: var(--brand); fill: none; stroke-width: 1.5; }
@@ -169,7 +169,7 @@
   /* Structure tables: every cell is a field; a change is written to the JSON as one undoable edit. */
   #structureWrap td { vertical-align: top; }
   #structureWrap tbody tr { cursor: default; }
-  #structureWrap tr.cur { background: var(--brand-subtle); }
+  #structureWrap tr.cur, #structureWrap tr.selrow { background: var(--brand-subtle); }
   #structureWrap input, #structureWrap select, #structureWrap textarea { width: 100%; min-width: 70px; padding: 3px 6px; font-size: 12.5px;
     background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); }
   #structureWrap textarea { resize: vertical; min-height: 28px; line-height: 1.35; display: block; }
@@ -870,6 +870,8 @@ function toggleSelected(ids) {
 const itemLabel = ({ kind, obj }) => obj.name || labelText(kind === "control_actions" ? obj.action : obj.signal) || obj.id;
 
 function applySelection() {
+  document.querySelectorAll("#diagram [data-sel]").forEach((el) => el.classList.toggle("ind", !!indicatedId && el.dataset.sel.split(",").includes(indicatedId)));
+  document.querySelectorAll("#structureWrap tr[data-row]").forEach((tr) => tr.classList.toggle("selrow", selection.has(tr.dataset.row)));
   document.querySelectorAll("#diagram [data-sel]").forEach((el) => {
     el.classList.toggle("sel", el.dataset.sel.split(",").some((id) => selection.has(id)));
     el.classList.toggle("editing", !!editingId && el.dataset.sel.split(",").includes(editingId));
@@ -916,12 +918,63 @@ function applySelection() {
   }
 }
 
+/* Selection holds one kind of object (5.5): blocks, control actions or feedback. A click selects; Shift/Ctrl/⌘+click
+   adds or removes an object of the same kind, and an object of another kind replaces the selection. */
+const selGroup = (id) => {
+  const k = Object.keys(SEL_KINDS).find((key) => (currentModel?.[key] || []).some((x) => x && x.id === id));
+  return k in BLOCK_KINDS ? "block" : k;
+};
 $("diagram").addEventListener("click", (e) => {
   const el = e.target.closest("[data-sel]");
-  if (!el) return;
+  if (!el) { if (!e.shiftKey && !e.ctrlKey && !e.metaKey) setSelection([]); return; }
   const ids = el.dataset.sel.split(",");
-  if (e.shiftKey) toggleSelected(ids);
-  if (!e.shiftKey || selection.has(ids[0])) focusRow(ids[0]);
+  if (!(e.shiftKey || e.ctrlKey || e.metaKey)) { setSelection(ids); return; }
+  const same = [...selection].every((id) => selGroup(id) === selGroup(ids[0]));
+  if (same) toggleSelected(ids); else setSelection(ids);
+});
+
+/* Indication (5.3): the element the mouse or the arrow keys point at gets the hovered shadow. The mouse and the keys
+   take over from each other, and only a real mouse movement counts (a scroll under a still pointer does not). */
+let indicatedId = null, lastMouse = [NaN, NaN];
+function setIndicated(id) { indicatedId = id; applySelection(); }
+$("diagram").addEventListener("mousemove", (e) => {
+  if (e.clientX === lastMouse[0] && e.clientY === lastMouse[1]) return;
+  lastMouse = [e.clientX, e.clientY];
+  const id = e.target.closest("[data-sel]")?.dataset.sel.split(",")[0] || null;
+  if (id !== indicatedId) setIndicated(id);
+});
+$("diagram").addEventListener("mouseleave", () => setIndicated(null));
+const ARROWS = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowDown: [0, 1], ArrowUp: [0, -1] };
+/** Move the indication to the nearest block in the arrow's direction on the screen; blocks in the same row or column first. */
+function moveIndication([dx, dy]) {
+  const items = [...document.querySelectorAll("#diagram g.node[data-sel]")].map((el) => ({ id: el.dataset.sel.split(",")[0], r: el.getBoundingClientRect() }));
+  if (!items.length) return;
+  const cur = items.find((it) => it.id === indicatedId);
+  if (!cur) {
+    const sel = items.find((it) => selection.has(it.id));
+    setIndicated((sel || items.slice().sort((a, b) => a.r.top - b.r.top || a.r.left - b.r.left)[0]).id);
+    return;
+  }
+  const cx = cur.r.left + cur.r.width / 2, cy = cur.r.top + cur.r.height / 2;
+  let best = null;
+  for (const it of items) {
+    if (it === cur) continue;
+    const mx = it.r.left + it.r.width / 2 - cx, my = it.r.top + it.r.height / 2 - cy;
+    const along = dx ? mx * dx : my * dy, across = dx ? Math.abs(my) : Math.abs(mx);
+    if (along <= 1) continue;
+    const overlap = dx ? Math.min(it.r.bottom, cur.r.bottom) - Math.max(it.r.top, cur.r.top) > 0 : Math.min(it.r.right, cur.r.right) - Math.max(it.r.left, cur.r.left) > 0;
+    const score = [overlap ? 0 : 1, along + 2 * across];
+    if (!best || score[0] < best.score[0] || (score[0] === best.score[0] && score[1] < best.score[1])) best = { id: it.id, score };
+  }
+  if (best) setIndicated(best.id);
+}
+document.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  const cmd = e.ctrlKey || e.metaKey;
+  if (e.key in ARROWS) { if (!cmd && !e.shiftKey) { e.preventDefault(); moveIndication(ARROWS[e.key]); } return; } // Ctrl/⌘+arrow is not used
+  if (e.key === "Enter" && cmd && indicatedId) { e.preventDefault(); setSelection([indicatedId]); return; }
+  if ((e.key === "Enter" || e.key === "F2") && !cmd && indicatedId && !e.target.closest?.("button, a, summary")) { e.preventDefault(); focusRow(indicatedId); return; }
+  if (e.key === "Escape") setSelection([]);
 });
 
 /* Conversions prepare for a deeper level of analysis: a control action that ends at a controlled process
