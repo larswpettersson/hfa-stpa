@@ -89,8 +89,17 @@
   header h1 .mark { width: 10px; height: 10px; border-radius: 2px; background: var(--brand); }
   .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
-  main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); padding: 12px 16px; min-height: 0; }
-  .panel { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  main { flex: 1; display: grid; grid-template-columns: minmax(0, var(--left-w, 55%)) 16px minmax(0, 1fr); padding: 12px 16px; min-height: 0; }
+  /* Drag bar (4.11): a 16 px field with a 4 px rounded bar in the middle */
+  .dragbar { cursor: col-resize; position: relative; touch-action: none; background: var(--bg); }
+  .dragbar::after { content: ""; position: absolute; left: 6px; right: 6px; top: 28px; bottom: 28px; border-radius: 2px; background: var(--info); }
+  .dragbar:hover::after, .dragbar:focus-visible::after, .dragbar.dragging::after { left: 5px; right: 5px; }
+  .ai-resize { left: -16px !important; width: 16px !important; background: none !important; }
+  .ai-resize::after { content: ""; position: absolute; left: 6px; right: 6px; top: 28px; bottom: 28px; border-radius: 2px; background: var(--info); }
+  /* Compact buttons (4.10): 28 px high */
+  header button, .view > .vbar button:not(.vtitle) { min-height: 28px; padding: 0 10px; font-size: 14px; border-radius: 8px; }
+  header .cmds { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .panel { background: var(--bg-elev); border: 1px solid var(--fg-muted); border-radius: 8px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   .panel > .pbody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
   /* Views: each has a bar with its title (click to compress) and an Expand button. A compressed view keeps its
      body rendered at zero height, so the JSON editor can still take focus for undoable edits. */
@@ -100,7 +109,6 @@
   .view > .vbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; background: var(--bg-elev); }
   .view > .vbar .vtitle { margin-right: auto; border: 0; background: none; padding: 2px 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-muted); }
   .view > .vbar .vtitle::before { content: "▾ "; font-weight: 400; }
-  .view > .vbar button:not(.vtitle) { padding: 1px 8px; font-size: 12px; }
   .view > .vbody { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
   .view.compressed { flex: none; min-height: 0; }
   .view.compressed > .vbody { flex: none; height: 0; overflow: hidden; }
@@ -194,6 +202,13 @@
 
 <header>
   <h1><span class="mark"></span>HFA STPA Workbench</h1>
+  <div class="cmds">
+    <button id="importBtn" title="Open a .json file">Open…</button>
+    <button id="exportBtn" title="Save the structure as a JSON file">Save</button>
+    <button id="undoBtn" title="Undo the last change to the structure (also from the tables and conversions)">Undo</button>
+    <button id="helpBtn" type="button" aria-label="Help – Keyboard shortcuts" aria-keyshortcuts="?" title="Help – Keyboard shortcuts (?)">?</button>
+    <input type="file" id="fileInput" accept=".json,application/json" hidden>
+  </div>
   <div class="row">
     <button id="themeBtn" title="Toggle light/dark theme">Theme</button>
   </div>
@@ -202,14 +217,6 @@
 <main>
   <!-- ───────────── Left: STPA editor ───────────── -->
   <section class="panel" id="leftPanel" aria-label="STPA control structure editor">
-    <div class="bar">
-      <h2>Control structure</h2>
-      <button id="helpBtn" type="button" aria-label="Help – Keyboard shortcuts" aria-keyshortcuts="?" title="Help – Keyboard shortcuts (?)">?</button>
-      <button id="importBtn" title="Open a .json file">Open…</button>
-      <button id="exportBtn" title="Save the structure as a JSON file">Save</button>
-      <button id="undoBtn" title="Undo the last change to the structure (also from the tables and conversions)">Undo</button>
-      <input type="file" id="fileInput" accept=".json,application/json" hidden>
-    </div>
     <div class="pbody">
       <section class="view" id="vJson" aria-label="JSON" hidden>
         <div class="vbar"><button class="vtitle" type="button">JSON</button></div>
@@ -229,6 +236,13 @@
           </div>
         </div>
       </section>
+    </div>
+  </section>
+
+  <div id="dragLeft" class="dragbar" role="separator" aria-orientation="vertical" aria-label="Resize the control structure and the tables" tabindex="0"></div>
+
+  <section class="panel" id="midPanel" aria-label="Structure tables and safety case">
+    <div class="pbody">
       <section class="view" id="vStructure" aria-label="Structure tables">
         <div class="vbar"><button class="vtitle" type="button">Blocks, control actions and feedback</button></div>
         <div class="vbody tables" id="structureWrap">
@@ -910,7 +924,7 @@ function applySelection() {
     return b;
   };
   if (!items.length) {
-    bar.textContent = "Shift+click blocks, control actions or feedback to select them and scope the analysis.";
+    bar.textContent = "Click a block, control action or feedback to select it and scope the analysis. Shift/Ctrl/⌘+click adds more of the same kind.";
   } else {
     bar.append(`Selected (${items.length}):`);
     items.forEach((it) => {
@@ -993,7 +1007,7 @@ function moveIndication([dx, dy]) {
   if (best) setIndicated(best.id);
 }
 document.addEventListener("keydown", (e) => {
-  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, dialog, [contenteditable]")) return;
+  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, dialog, [role=separator], [contenteditable]")) return;
   const cmd = e.ctrlKey || e.metaKey;
   if (e.key in ARROWS) { if (!cmd && !e.shiftKey) { e.preventDefault(); moveIndication(ARROWS[e.key]); } return; } // Ctrl/⌘+arrow is not used
   if (e.key === "Enter" && cmd && indicatedId) { e.preventDefault(); setSelection([indicatedId]); return; }
@@ -1093,11 +1107,32 @@ function deleteSelected() {
   setSelection([]);
 }
 $("helpBtn").addEventListener("click", () => $("helpDlg").showModal());
+/* The drag bar between the control structure and the tables (4.11): drag, or ←/→ when it has focus. */
+(function dragBar() {
+  const bar = $("dragLeft"), main = document.querySelector("main"), KEY = "leftWidth";
+  const set = (pct) => {
+    pct = Math.max(25, Math.min(75, pct));
+    main.style.setProperty("--left-w", pct + "%");
+    bar.setAttribute("aria-valuenow", String(Math.round(pct)));
+    store.set(KEY, pct);
+  };
+  const saved = store.get(KEY);
+  set(typeof saved === "number" ? saved : 55);
+  const pctAt = (x) => { const r = main.getBoundingClientRect(); return ((x - r.left - 16) / (r.width - 16 - 16)) * 100; };
+  bar.addEventListener("pointerdown", (e) => { bar.setPointerCapture(e.pointerId); bar.classList.add("dragging"); });
+  bar.addEventListener("pointermove", (e) => { if (bar.classList.contains("dragging")) set(pctAt(e.clientX)); });
+  bar.addEventListener("pointerup", () => bar.classList.remove("dragging"));
+  bar.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    set(parseFloat(bar.getAttribute("aria-valuenow")) + (e.key === "ArrowRight" ? 2 : -2));
+  });
+})();
 $("addBelowBtn").addEventListener("click", addBelow);
 $("addBesideBtn").addEventListener("click", addBeside);
 /* Bare letter keys are shortcuts only when no text is being edited. */
 document.addEventListener("keydown", (e) => {
-  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, dialog, [contenteditable]")) return;
+  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, dialog, [role=separator], [contenteditable]")) return;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); stepHistory(e.shiftKey ? 1 : -1); return; }
   if (e.ctrlKey || e.metaKey) return;
   const k = e.key.toLowerCase();
