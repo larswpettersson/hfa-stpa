@@ -25,10 +25,10 @@
     --info: #007FFF; --success: #228B22; --warning: #B38600; --error: #C70039;
     --bg-error: #FBE3E8; --bg-warning: #FFF6D6; --bg-success: #E3F3E8;
     --border: #D0D7DE; --radius: 6px;
-    /* Process Block states from the Penpot library: Hovered = 4/4 drop shadow, Selected = spread-4 halo */
-    --shadow-hover: rgba(0,0,0,.2); --shadow-sel: rgba(0,0,0,.2);
-    --font: "Source Sans 3", "Source Sans Pro", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    /* Shadow tokens (tokens.json): shadow.hovered = 4/4 drop shadow blur 4, shadow.selected = spread-4 halo blur 2, foreground.base at 40 % */
+    --shadow-hover: rgba(13,17,23,.4); --shadow-sel: rgba(13,17,23,.4);
+    --font: "Open Sans", Arial, sans-serif; /* font.family.base */
+    --mono: ui-monospace, Consolas, "Courier New", monospace; /* font.family.mono */
     /* The shared AI panel (ai-assist.js) reads the HFA DS token names; this tool's variables carry the same values. */
     --color-background-base: var(--bg); --color-background-elevated: var(--bg-elev); --color-background-sunken: var(--bg-sunken);
     --color-foreground: var(--fg); --color-foreground-muted: var(--fg-muted); --color-foreground-subtle: var(--fg-subtle);
@@ -44,7 +44,7 @@
       --info: #58A6FF; --success: #3FB950; --warning: #FFC300; --error: #E03E3E;
       --bg-error: #602A36; --bg-warning: #6B5414; --bg-success: #1A5A42;
       --border: #4A515B; color-scheme: dark;
-      --shadow-hover: rgba(0,0,0,.55); --shadow-sel: rgba(250,251,252,.35);
+      --shadow-hover: rgba(250,251,252,.4); --shadow-sel: rgba(250,251,252,.4);
     }
   }
   :root[data-theme="dark"] {
@@ -54,7 +54,7 @@
     --info: #58A6FF; --success: #3FB950; --warning: #FFC300; --error: #E03E3E;
     --bg-error: #602A36; --bg-warning: #6B5414; --bg-success: #1A5A42;
     --border: #4A515B; color-scheme: dark;
-    --shadow-hover: rgba(0,0,0,.55); --shadow-sel: rgba(250,251,252,.35);
+    --shadow-hover: rgba(250,251,252,.4); --shadow-sel: rgba(250,251,252,.4);
   }
 
   * { box-sizing: border-box; }
@@ -66,6 +66,12 @@
     padding: 5px 10px; cursor: pointer; white-space: nowrap;
   }
   button:hover { border-color: var(--fg-subtle); }
+  #helpDlg { max-width: 460px; background: var(--bg-elev); color: var(--fg); border: 1px solid var(--fg-muted); border-radius: 8px; padding: 16px; }
+  #helpDlg::backdrop { background: rgba(0,0,0,.4); }
+  #helpDlg h2 { margin: 0 0 8px; font-size: 16px; }
+  #helpDlg ul { padding-left: 18px; }
+  #helpDlg select, #helpDlg button { min-height: 28px; }
+  #helpDlg form { margin-top: 12px; text-align: right; }
   button.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
   button:disabled { opacity: .5; cursor: default; }
   select, input[type=text], input[type=password], input[type=url], input[type=number] {
@@ -83,17 +89,26 @@
   header h1 .mark { width: 10px; height: 10px; border-radius: 2px; background: var(--brand); }
   .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
-  main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); padding: 12px 16px; min-height: 0; }
-  .panel { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  main { flex: 1; display: grid; grid-template-columns: minmax(0, var(--left-w, 55%)) 16px minmax(0, 1fr); padding: 12px 16px; min-height: 0; }
+  /* Drag bar (4.11): a 16 px field with a 4 px rounded bar in the middle */
+  .dragbar { cursor: col-resize; position: relative; touch-action: none; background: var(--bg); }
+  .dragbar::after { content: ""; position: absolute; left: 6px; right: 6px; top: 28px; bottom: 28px; border-radius: 2px; background: var(--info); }
+  .dragbar:hover::after, .dragbar:focus-visible::after, .dragbar.dragging::after { left: 5px; right: 5px; }
+  .ai-resize { left: -16px !important; width: 16px !important; background: none !important; }
+  .ai-resize::after { content: ""; position: absolute; left: 6px; right: 6px; top: 28px; bottom: 28px; border-radius: 2px; background: var(--info); }
+  /* Compact buttons (4.10): 28 px high */
+  header button, .view > .vbar button:not(.vtitle) { min-height: 28px; padding: 0 10px; font-size: 14px; border-radius: 8px; }
+  header .cmds { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .panel { background: var(--bg-elev); border: 1px solid var(--fg-muted); border-radius: 8px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   .panel > .pbody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
   /* Views: each has a bar with its title (click to compress) and an Expand button. A compressed view keeps its
      body rendered at zero height, so the JSON editor can still take focus for undoable edits. */
   .view { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 120px; border-top: 1px solid var(--border); }
   .view:first-child { border-top: 0; }
+  .view[hidden] { display: none; }
   .view > .vbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; background: var(--bg-elev); }
   .view > .vbar .vtitle { margin-right: auto; border: 0; background: none; padding: 2px 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-muted); }
   .view > .vbar .vtitle::before { content: "▾ "; font-weight: 400; }
-  .view > .vbar button:not(.vtitle) { padding: 1px 8px; font-size: 12px; }
   .view > .vbody { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
   .view.compressed { flex: none; min-height: 0; }
   .view.compressed > .vbody { flex: none; height: 0; overflow: hidden; }
@@ -126,10 +141,10 @@
   #diagram .ctrl rect { fill: var(--bg-elev); stroke: var(--brand); }
   #diagram .proc rect { fill: var(--bg-sunken); stroke: var(--fg-muted); }
   #diagram .act rect, #diagram .sens rect { fill: var(--bg-elev); stroke: var(--fg); stroke-width: 1; }
-  #diagram .node[data-sel]:hover rect, #diagram path[data-sel]:hover, #diagram text[data-sel]:hover,
+  #diagram .node.ind rect, #diagram path.ind, #diagram text.ind,
   #diagram .node.editing rect, #diagram path.editing, #diagram text.editing { filter: drop-shadow(4px 4px 4px var(--shadow-hover)); }
   #diagram .node.sel rect, #diagram path.sel, #diagram text.sel { filter: url(#sel-halo); }
-  #diagram .node.sel[data-sel]:hover rect, #diagram path.sel:hover, #diagram text.sel:hover { filter: url(#sel-halo) drop-shadow(4px 4px 4px var(--shadow-hover)); }
+  #diagram .node.sel.ind rect, #diagram path.sel.ind, #diagram text.sel.ind { filter: url(#sel-halo) drop-shadow(4px 4px 4px var(--shadow-hover)); }
   #diagram text { fill: var(--fg); font: 12px var(--font); }
   #diagram .sub { fill: var(--fg-muted); font-size: 10.5px; }
   #diagram .ca { stroke: var(--brand); fill: none; stroke-width: 1.5; }
@@ -144,6 +159,7 @@
   #diagram [data-id], #diagram [data-ids], #diagram [data-sel] { cursor: pointer; }
   #selBar { display: flex; gap: 6px; row-gap: 4px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--fg-muted); padding: 4px 10px 6px; border-top: 1px solid var(--border); }
   #selBar button { padding: 2px 8px; font-size: 12px; }
+  #selBar .selcmds { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; width: 100%; }
   .selchip { display: inline-flex; align-items: center; gap: 2px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px; padding: 0 2px 0 8px; color: var(--fg); }
   .selchip button { border: 0; background: none; padding: 0 5px; font-size: 12px; line-height: 18px; color: var(--fg-muted); }
   .tables { border-top: 1px solid var(--border); max-height: 32vh; overflow: auto; }
@@ -169,7 +185,7 @@
   /* Structure tables: every cell is a field; a change is written to the JSON as one undoable edit. */
   #structureWrap td { vertical-align: top; }
   #structureWrap tbody tr { cursor: default; }
-  #structureWrap tr.cur { background: var(--brand-subtle); }
+  #structureWrap tr.cur, #structureWrap tr.selrow { background: var(--brand-subtle); }
   #structureWrap input, #structureWrap select, #structureWrap textarea { width: 100%; min-width: 70px; padding: 3px 6px; font-size: 12.5px;
     background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); }
   #structureWrap textarea { resize: vertical; min-height: 28px; line-height: 1.35; display: block; }
@@ -187,6 +203,14 @@
 
 <header>
   <h1><span class="mark"></span>HFA STPA Workbench</h1>
+  <div class="cmds">
+    <button id="newBtn" title="Replace the analysis with a new control structure: one controller and one controlled process">New</button>
+    <button id="importBtn" title="Open a .json file">Open…</button>
+    <button id="exportBtn" title="Save the structure as a JSON file">Save</button>
+    <button id="undoBtn" title="Undo the last change to the structure (also from the tables and conversions)">Undo</button>
+    <button id="helpBtn" type="button" aria-label="Help – Keyboard shortcuts" aria-keyshortcuts="?" title="Help – Keyboard shortcuts (?)">?</button>
+    <input type="file" id="fileInput" accept=".json,application/json" hidden>
+  </div>
   <div class="row">
     <button id="themeBtn" title="Toggle light/dark theme">Theme</button>
   </div>
@@ -195,17 +219,8 @@
 <main>
   <!-- ───────────── Left: STPA editor ───────────── -->
   <section class="panel" id="leftPanel" aria-label="STPA control structure editor">
-    <div class="bar">
-      <h2>Control structure</h2>
-      <select id="preset" aria-label="Load preset"><option value="">Load preset…</option></select>
-      <button id="formatBtn" title="Pretty-print JSON">Format</button>
-      <button id="importBtn" title="Open a .json file">Open…</button>
-      <button id="exportBtn" title="Save the structure as a JSON file">Save</button>
-      <button id="undoBtn" title="Undo the last change to the structure (also from the tables and conversions)">Undo</button>
-      <input type="file" id="fileInput" accept=".json,application/json" hidden>
-    </div>
     <div class="pbody">
-      <section class="view" id="vJson" aria-label="JSON">
+      <section class="view" id="vJson" aria-label="JSON" hidden>
         <div class="vbar"><button class="vtitle" type="button">JSON</button></div>
         <div class="vbody"><textarea id="editor" spellcheck="false" aria-label="STPA JSON"></textarea></div>
       </section>
@@ -223,6 +238,13 @@
           </div>
         </div>
       </section>
+    </div>
+  </section>
+
+  <div id="dragLeft" class="dragbar" role="separator" aria-orientation="vertical" aria-label="Resize the control structure and the tables" tabindex="0"></div>
+
+  <section class="panel" id="midPanel" aria-label="Structure tables and safety case">
+    <div class="pbody">
       <section class="view" id="vStructure" aria-label="Structure tables">
         <div class="vbar"><button class="vtitle" type="button">Blocks, control actions and feedback</button></div>
         <div class="vbody tables" id="structureWrap">
@@ -269,6 +291,24 @@
 
 </main>
 
+<dialog id="helpDlg" aria-labelledby="helpTitle">
+  <h2 id="helpTitle">Help – Keyboard shortcuts</h2>
+  <p>The underlined letter is the key. Press it alone, without Alt.</p>
+  <ul>
+    <li><b>B</b> Add Below – a block below the selected block</li>
+    <li><b>S</b> Add Beside – a block beside the selected block</li>
+    <li><b>Arrows</b> – move the indication to the nearest block</li>
+    <li><b>Ctrl/⌘+Enter</b> – select the indicated object (same as a click)</li>
+    <li><b>Enter</b> or <b>F2</b> – edit the name of the indicated object</li>
+    <li><b>Shift/Ctrl/⌘+click</b> – add or remove an object of the same kind</li>
+    <li><b>Delete</b> – delete the selected objects and their links</li>
+    <li><b>Esc</b> – leave a cell, then clear the selection</li>
+    <li><b>Ctrl/⌘+Z</b> – undo</li>
+    <li><b>?</b> – this help</li>
+  </ul>
+  <label>Open example… <select id="preset" aria-label="Open example…"><option value="">Open example…</option></select></label>
+  <form method="dialog"><button class="primary" id="helpClose" value="close">Close</button></form>
+</dialog>
 <div class="status" id="status" role="status" aria-live="polite"></div>
 
 <script src="ai-assist.js"></script>
@@ -298,7 +338,7 @@ const $ = (id) => document.getElementById(id);
      controlled_processes[{id,name,states[]}],
      control_actions[{id,source,target,action,parameters[]}]   (action: a label or a list of labels),
      feedback[{id,source,target,signal,latency_tolerance_ms?}]   (signal: a label or a list of labels),
-     actuators[{id,name,target,actuation?,converted_from?}]   (target: a controlled process),
+     actuators[{id,name,target,actuation?,converted_from?}]   (target: the block it acts on, a controller or a controlled process),
      sensors[{id,name,source,measures?,converted_from?}]       (source: a controlled process)
    A control action may target another controller (hierarchical structures) or an
    actuator; feedback may come from a sensor. The actuator then acts on its target
@@ -465,12 +505,12 @@ function validateModel(m) {
   const isNode = (id) => ["controllers", "controlled_processes", "actuators", "sensors"].includes(ids.get(id));
   actuators.forEach((a) => {
     if (!a || !a.id) return;
-    if (!isProc(a.target)) errors.push(`Actuator ${a.id}: target "${a.target}" is not a controlled process`);
+    if (!isProc(a.target) && !isCtrl(a.target)) errors.push(`Actuator ${a.id}: target "${a.target}" is not a controller or a controlled process`);
     if (!cas.some((ca) => ca && ca.target === a.id)) warnings.push(`Actuator "${a.name || a.id}" receives no control actions`);
   });
   sensors.forEach((s) => {
     if (!s || !s.id) return;
-    if (!isProc(s.source)) errors.push(`Sensor ${s.id}: source "${s.source}" is not a controlled process`);
+    if (!isProc(s.source) && !isCtrl(s.source)) errors.push(`Sensor ${s.id}: source "${s.source}" is not a controller or a controlled process`);
     if (!fbs.some((fb) => fb && fb.source === s.id)) warnings.push(`Sensor "${s.name || s.id}" sends no feedback`);
   });
   cas.forEach((ca) => {
@@ -870,6 +910,8 @@ function toggleSelected(ids) {
 const itemLabel = ({ kind, obj }) => obj.name || labelText(kind === "control_actions" ? obj.action : obj.signal) || obj.id;
 
 function applySelection() {
+  document.querySelectorAll("#diagram [data-sel]").forEach((el) => el.classList.toggle("ind", !!indicatedId && el.dataset.sel.split(",").includes(indicatedId)));
+  document.querySelectorAll("#structureWrap tr[data-row]").forEach((tr) => tr.classList.toggle("selrow", selection.has(tr.dataset.row)));
   document.querySelectorAll("#diagram [data-sel]").forEach((el) => {
     el.classList.toggle("sel", el.dataset.sel.split(",").some((id) => selection.has(id)));
     el.classList.toggle("editing", !!editingId && el.dataset.sel.split(",").includes(editingId));
@@ -884,7 +926,7 @@ function applySelection() {
     return b;
   };
   if (!items.length) {
-    bar.textContent = "Shift+click blocks, control actions or feedback to select them and scope the analysis.";
+    bar.textContent = "Click a block, control action or feedback to select it and scope the analysis. Shift/Ctrl/⌘+click adds more of the same kind.";
   } else {
     bar.append(`Selected (${items.length}):`);
     items.forEach((it) => {
@@ -897,31 +939,87 @@ function applySelection() {
       chip.appendChild(x);
       bar.appendChild(chip);
     });
-    const procIds = new Set((currentModel.controlled_processes || []).map((p) => p && p.id));
-    const caOk = items.filter((it) => it.kind === "control_actions" && procIds.has(it.obj.target));
-    const fbOk = items.filter((it) => it.kind === "feedback" && procIds.has(it.obj.source));
-    const blocks = items.filter((it) => it.kind in BLOCK_KINDS);
-    const sw = document.createElement("select");
-    sw.title = "Change the type of the selected process blocks; their ids, names and links stay";
-    sw.setAttribute("aria-label", "Switch the selected blocks to another type");
-    sw.disabled = !blocks.length;
-    sw.appendChild(new Option("Switch to…", ""));
-    for (const k in BLOCK_KINDS) sw.appendChild(new Option(BLOCK_KINDS[k].toLowerCase(), k));
-    sw.addEventListener("change", () => { if (sw.value) switchSelected(sw.value); });
-    bar.append(
-      btn("Convert to actuator", "Insert an actuator between each selected control action and the process it acts on", () => convertSelected("actuator"), !caOk.length),
-      btn("Convert to sensor", "Insert a sensor between the process and each selected feedback", () => convertSelected("sensor"), !fbOk.length),
-      sw,
-      btn("Clear", "Clear the selection (analyse the whole structure)", () => setSelection([])));
   }
+  // Convert applies to every control action and feedback, whichever blocks they connect (STPA-LINK-3 to 5); the buttons are always there.
+  const blockIds = new Set([...(currentModel?.controllers || []), ...(currentModel?.controlled_processes || [])].map((p) => p && p.id));
+  const caOk = items.filter((it) => it.kind === "control_actions" && blockIds.has(it.obj.target));
+  const fbOk = items.filter((it) => it.kind === "feedback" && blockIds.has(it.obj.source));
+  const blocks = items.filter((it) => it.kind in BLOCK_KINDS);
+  const sw = document.createElement("select");
+  sw.title = "Change the type of the selected process blocks; their ids, names and links stay";
+  sw.setAttribute("aria-label", "Switch the selected blocks to another type");
+  sw.disabled = !blocks.length;
+  sw.appendChild(new Option("Switch to…", ""));
+  for (const k in BLOCK_KINDS) sw.appendChild(new Option(BLOCK_KINDS[k].toLowerCase(), k));
+  sw.addEventListener("change", () => { if (sw.value) switchSelected(sw.value); });
+  const row = document.createElement("div");
+  row.className = "selcmds";
+  row.append(
+    btn("Convert to actuator", caOk.length ? "Insert an actuator on each selected control action" : "Select a control action first: a control action is converted to an actuator block", () => convertSelected("actuator"), !caOk.length),
+    btn("Convert to sensor", fbOk.length ? "Insert a sensor on each selected feedback" : "Select a feedback first: a feedback is converted to a sensor block", () => convertSelected("sensor"), !fbOk.length),
+    sw,
+    btn("Delete", "Delete the selected objects and their links (Delete)", deleteSelected, !items.length),
+    btn("Clear", "Clear the selection (analyse the whole structure)", () => setSelection([]), !items.length));
+  bar.appendChild(row);
 }
 
+/* Selection holds one kind of object (5.5): blocks, control actions or feedback. A click selects; Shift/Ctrl/⌘+click
+   adds or removes an object of the same kind, and an object of another kind replaces the selection. */
+const selGroup = (id) => {
+  const k = Object.keys(SEL_KINDS).find((key) => (currentModel?.[key] || []).some((x) => x && x.id === id));
+  return k in BLOCK_KINDS ? "block" : k;
+};
 $("diagram").addEventListener("click", (e) => {
   const el = e.target.closest("[data-sel]");
-  if (!el) return;
+  if (!el) { if (!e.shiftKey && !e.ctrlKey && !e.metaKey) setSelection([]); return; }
   const ids = el.dataset.sel.split(",");
-  if (e.shiftKey) toggleSelected(ids);
-  if (!e.shiftKey || selection.has(ids[0])) focusRow(ids[0]);
+  if (!(e.shiftKey || e.ctrlKey || e.metaKey)) { setSelection(ids); return; }
+  const same = [...selection].every((id) => selGroup(id) === selGroup(ids[0]));
+  if (same) toggleSelected(ids); else setSelection(ids);
+});
+
+/* Indication (5.3): the element the mouse or the arrow keys point at gets the hovered shadow. The mouse and the keys
+   take over from each other, and only a real mouse movement counts (a scroll under a still pointer does not). */
+let indicatedId = null, lastMouse = [NaN, NaN];
+function setIndicated(id) { indicatedId = id; applySelection(); }
+$("diagram").addEventListener("mousemove", (e) => {
+  if (e.clientX === lastMouse[0] && e.clientY === lastMouse[1]) return;
+  lastMouse = [e.clientX, e.clientY];
+  const id = e.target.closest("[data-sel]")?.dataset.sel.split(",")[0] || null;
+  if (id !== indicatedId) setIndicated(id);
+});
+$("diagram").addEventListener("mouseleave", () => setIndicated(null));
+const ARROWS = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowDown: [0, 1], ArrowUp: [0, -1] };
+/** Move the indication to the nearest block in the arrow's direction on the screen; blocks in the same row or column first. */
+function moveIndication([dx, dy]) {
+  const items = [...document.querySelectorAll("#diagram g.node[data-sel]")].map((el) => ({ id: el.dataset.sel.split(",")[0], r: el.getBoundingClientRect() }));
+  if (!items.length) return;
+  const cur = items.find((it) => it.id === indicatedId);
+  if (!cur) {
+    const sel = items.find((it) => selection.has(it.id));
+    setIndicated((sel || items.slice().sort((a, b) => a.r.top - b.r.top || a.r.left - b.r.left)[0]).id);
+    return;
+  }
+  const cx = cur.r.left + cur.r.width / 2, cy = cur.r.top + cur.r.height / 2;
+  let best = null;
+  for (const it of items) {
+    if (it === cur) continue;
+    const mx = it.r.left + it.r.width / 2 - cx, my = it.r.top + it.r.height / 2 - cy;
+    const along = dx ? mx * dx : my * dy, across = dx ? Math.abs(my) : Math.abs(mx);
+    if (along <= 1) continue;
+    const overlap = dx ? Math.min(it.r.bottom, cur.r.bottom) - Math.max(it.r.top, cur.r.top) > 0 : Math.min(it.r.right, cur.r.right) - Math.max(it.r.left, cur.r.left) > 0;
+    const score = [overlap ? 0 : 1, along + 2 * across];
+    if (!best || score[0] < best.score[0] || (score[0] === best.score[0] && score[1] < best.score[1])) best = { id: it.id, score };
+  }
+  if (best) setIndicated(best.id);
+}
+document.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, dialog, [role=separator], [contenteditable]")) return;
+  const cmd = e.ctrlKey || e.metaKey;
+  if (e.key in ARROWS) { if (!cmd && !e.shiftKey) { e.preventDefault(); moveIndication(ARROWS[e.key]); } return; } // Ctrl/⌘+arrow is not used
+  if (e.key === "Enter" && cmd && indicatedId) { e.preventDefault(); setSelection([indicatedId]); return; }
+  if ((e.key === "Enter" || e.key === "F2") && !cmd && indicatedId && !e.target.closest?.("button, a, summary")) { e.preventDefault(); focusRow(indicatedId); return; }
+  if (e.key === "Escape") setSelection([]);
 });
 
 /* Conversions prepare for a deeper level of analysis: a control action that ends at a controlled process
@@ -935,15 +1033,15 @@ function nextId(m, prefix) {
 }
 function convertSelected(to) {
   const m = structuredClone(currentModel), done = [], next = new Set(selection);
-  const procIds = new Set((m.controlled_processes || []).map((p) => p && p.id));
+  const blockIds = new Set([...(m.controllers || []), ...(m.controlled_processes || [])].map((p) => p && p.id));
   selectedItems(m).forEach(({ kind, obj }) => {
-    if (to === "actuator" && kind === "control_actions" && procIds.has(obj.target)) {
+    if (to === "actuator" && kind === "control_actions" && blockIds.has(obj.target)) {
       const id = nextId(m, "a");
       (m.actuators ||= []).push({ id, name: `${labelText(obj.action) || obj.id} actuator`, target: obj.target, actuation: "", converted_from: obj.id });
       obj.target = id;
       next.delete(obj.id); next.add(id); done.push(`${obj.id} → actuator ${id}`);
     }
-    if (to === "sensor" && kind === "feedback" && procIds.has(obj.source)) {
+    if (to === "sensor" && kind === "feedback" && blockIds.has(obj.source)) {
       const id = nextId(m, "s");
       (m.sensors ||= []).push({ id, name: `${labelText(obj.signal) || obj.id} sensor`, source: obj.source, measures: "", converted_from: obj.id });
       obj.source = id;
@@ -953,7 +1051,7 @@ function convertSelected(to) {
   if (!done.length) return;
   replaceEditor(m);
   setSelection(next);
-  setStatus(`Converted ${done.join(", ")}. Ctrl/⌘+Z in the editor undoes it.`);
+  setStatus(`Converted ${done.join(", ")}. Undo (Ctrl/⌘+Z) reverts it.`);
 }
 
 /* Add Below (design-stpa.md, STPA-ADD): a new controlled process under each selected controller or process,
@@ -999,14 +1097,63 @@ function addBeside() {
   focusRow(id);
   setStatus(`Added ${id} beside ${sel.map((it) => it.id).join(", ")}. Undo removes it.`);
 }
+/* Delete removes the selected objects and the links that start or end at them, as one undoable step (STPA-KEYS-3). */
+function deleteSelected() {
+  const ids = selectedItems().map((it) => it.id);
+  if (!ids.length) return;
+  editStructure((m) => {
+    const gone = new Set(ids);
+    ["control_actions", "feedback"].forEach((k) => (m[k] || []).forEach((x) => { if (x && (gone.has(x.source) || gone.has(x.target))) gone.add(x.id); }));
+    STRUCT_KEYS.forEach((k) => { if (Array.isArray(m[k])) m[k] = m[k].filter((x) => !(x && gone.has(x.id))); });
+    // a controller with nothing left under it is a controlled process again (STPA-TYPE-2)
+    (m.controllers || []).slice().forEach((c) => {
+      if (c && ids.some((id) => id !== c.id) && (m.controllers || []).length > 1 && !(m.control_actions || []).some((ca) => ca && ca.source === c.id)
+        && (currentModel.control_actions || []).some((ca) => ca && ca.source === c.id && gone.has(ca.target))) switchBlock(m, c.id, "controlled_processes");
+    });
+  }, `Deleted ${ids.join(", ")} with their links.`);
+  setSelection([]);
+}
+$("newBtn").addEventListener("click", () => {
+  if (!confirm("New replaces the analysis with a controller and a controlled process. Undo (Ctrl/⌘+Z) brings the old one back.")) return;
+  setEditor({ system: "New analysis", controllers: [{ id: "c1", name: "Controller", process_model: { variables: [], assumptions: [] } }],
+    controlled_processes: [{ id: "p1", name: "Controlled process", states: [] }],
+    control_actions: [{ id: "ca1", source: "c1", target: "p1", action: "" }], feedback: [{ id: "fb1", source: "p1", target: "c1", signal: "" }] });
+  setSelection([]);
+  window.STPAAssist?.clear?.();
+  setStatus("New analysis. Undo (Ctrl/⌘+Z) brings the old one back.");
+});
+$("helpBtn").addEventListener("click", () => $("helpDlg").showModal());
+/* The drag bar between the control structure and the tables (4.11): drag, or ←/→ when it has focus. */
+(function dragBar() {
+  const bar = $("dragLeft"), main = document.querySelector("main"), KEY = "leftWidth";
+  const set = (pct) => {
+    pct = Math.max(25, Math.min(75, pct));
+    main.style.setProperty("--left-w", pct + "%");
+    bar.setAttribute("aria-valuenow", String(Math.round(pct)));
+    store.set(KEY, pct);
+  };
+  const saved = store.get(KEY);
+  set(typeof saved === "number" ? saved : 55);
+  const pctAt = (x) => { const r = main.getBoundingClientRect(); return ((x - r.left - 16) / (r.width - 16 - 16)) * 100; };
+  bar.addEventListener("pointerdown", (e) => { bar.setPointerCapture(e.pointerId); bar.classList.add("dragging"); });
+  bar.addEventListener("pointermove", (e) => { if (bar.classList.contains("dragging")) set(pctAt(e.clientX)); });
+  bar.addEventListener("pointerup", () => bar.classList.remove("dragging"));
+  bar.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    set(parseFloat(bar.getAttribute("aria-valuenow")) + (e.key === "ArrowRight" ? 2 : -2));
+  });
+})();
 $("addBelowBtn").addEventListener("click", addBelow);
 $("addBesideBtn").addEventListener("click", addBeside);
 /* Bare letter keys are shortcuts only when no text is being edited. */
 document.addEventListener("keydown", (e) => {
-  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, [contenteditable]")) return;
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); $("undoBtn").click(); return; }
+  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, dialog, [role=separator], [contenteditable]")) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); stepHistory(e.shiftKey ? 1 : -1); return; }
   if (e.ctrlKey || e.metaKey) return;
   const k = e.key.toLowerCase();
+  if (e.key === "?") { e.preventDefault(); $("helpDlg").showModal(); return; }
+  if (e.key === "Delete") { e.preventDefault(); deleteSelected(); return; }
   if (k === "b") { e.preventDefault(); if (canAddBelow()) addBelow(); }
   if (k === "s") { e.preventDefault(); if (canAddBelow()) addBeside(); }
 });
@@ -1369,31 +1516,33 @@ function applyViews() {
   VIEW_IDS.forEach((id) => {
     const v = $(id), st = viewState[id] || {};
     v.classList.toggle("compressed", !!st.compressed);
-    v.classList.toggle("expanded", !!st.expanded);
     v.querySelector(".vtitle").setAttribute("aria-expanded", String(!st.compressed));
-    v.querySelector(".vcomp").setAttribute("aria-pressed", String(!!st.compressed));
-    v.querySelector(".vexp").setAttribute("aria-pressed", String(!!st.expanded));
   });
 }
 VIEW_IDS.forEach((id) => {
-  const bar = $(id).querySelector(".vbar"), name = bar.querySelector(".vtitle").textContent;
-  const mk = (cls, text, title, onClick) => {
-    const b = document.createElement("button");
-    b.type = "button"; b.className = cls; b.textContent = text; b.title = title;
-    b.addEventListener("click", onClick);
-    bar.appendChild(b);
-  };
-  bar.querySelector(".vtitle").title = `Compress or show ${name}`;
-  bar.querySelector(".vtitle").addEventListener("click", () => setView(id, { compressed: !viewState[id]?.compressed }));
-  mk("vcomp", "Compress", `Compress ${name} to its bar (press again to show it)`, () => setView(id, { compressed: !viewState[id]?.compressed }));
-  mk("vexp", "Expand", `Let ${name} take the free height (press again to restore)`, () => setView(id, { expanded: !viewState[id]?.expanded }));
+  const title = $(id).querySelector(".vbar .vtitle");
+  title.title = `Close or open ${title.textContent}`;
+  title.addEventListener("click", () => setView(id, { compressed: !viewState[id]?.compressed }));
 });
 
-$("undoBtn").addEventListener("click", () => {
-  const ed = $("editor");
-  ed.focus({ preventScroll: true });
-  if (document.execCommand("undo")) { clearTimeout(editTimer); refreshEditor(); }
-});
+/* Undo and redo keep their own history of the structure text, because the JSON editor is not shown and a hidden
+   textarea has no undo of its own. Every change that reaches refreshEditor is one step. */
+const undoLog = { texts: [], at: -1, applying: false };
+function recordHistory(text) {
+  if (undoLog.applying || undoLog.texts[undoLog.at] === text) return;
+  undoLog.texts.length = undoLog.at + 1;
+  undoLog.texts.push(text);
+  if (undoLog.texts.length > 200) undoLog.texts.shift();
+  undoLog.at = undoLog.texts.length - 1;
+}
+function stepHistory(by) {
+  const to = undoLog.at + by;
+  if (to < 0 || to >= undoLog.texts.length) return;
+  undoLog.at = to;
+  undoLog.applying = true;
+  try { $("editor").value = undoLog.texts[to]; clearTimeout(editTimer); refreshEditor(); } finally { undoLog.applying = false; }
+}
+$("undoBtn").addEventListener("click", () => stepHistory(-1));
 
 /* ── Editor wiring ───────────────────────────────────────────────────────── */
 let currentModel = null;      // last structure that parsed without errors
@@ -1402,6 +1551,7 @@ let lastValidation = { errors: [], warnings: [] };
 function refreshEditor() {
   const text = $("editor").value;
   store.set("structure", text);
+  recordHistory(text);
   const issues = $("issues");
   issues.replaceChildren();
   const add = (cls, msg) => { const d = document.createElement("div"); d.className = cls; d.textContent = msg; issues.appendChild(d); };
@@ -1421,7 +1571,7 @@ function refreshEditor() {
   }
 }
 function setEditor(obj) { $("editor").value = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); refreshEditor(); }
-/** Like setEditor, but as an edit the browser can undo (Ctrl/⌘+Z in the editor). */
+/** Like setEditor, but as an edit that Undo (Ctrl/⌘+Z) can revert. */
 function replaceEditor(obj) {
   const ed = $("editor"), back = document.activeElement, text = JSON.stringify(obj, null, 2);
   ed.focus({ preventScroll: true }); ed.select();
@@ -1471,7 +1621,6 @@ $("preset").addEventListener("change", (e) => {
   const name = e.target.value; e.target.value = "";
   if (name && confirm(`Replace the editor contents with "${name}"?`)) setEditor(PRESETS[name]);
 });
-$("formatBtn").addEventListener("click", () => { const { model } = parseModel($("editor").value); if (model) setEditor(model); });
 $("exportBtn").addEventListener("click", () => {
   const name = (currentModel?.system || "stpa").replace(/[^\w-]+/g, "_").slice(0, 60);
   download(`${name}.json`, $("editor").value, "application/json");
@@ -1580,10 +1729,10 @@ window.STPAAssist = HFAAssist.mount({
       const errs = validateModel(model).errors;
       if (errs.length && !confirm(`The merged structure has ${errs.length} error(s):\n\n${errs.slice(0, 8).join("\n")}\n\nApply anyway?`)) return false;
       replaceEditor(model);
-      return `Patch applied: ${stats.added} added, ${stats.changed} changed, ${stats.removed} removed. Ctrl/⌘+Z in the editor undoes it.`;
+      return `Patch applied: ${stats.added} added, ${stats.changed} changed, ${stats.removed} removed. Undo (Ctrl/⌘+Z) reverts it.`;
     }
     replaceEditor(obj);
-    return "Structure loaded. Ctrl/⌘+Z in the editor undoes it.";
+    return "Structure loaded. Undo (Ctrl/⌘+Z) reverts it.";
   },
   snapshot: () => $("editor").value,
   restore: (text) => setEditor(text),
