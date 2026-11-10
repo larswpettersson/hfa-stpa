@@ -25,8 +25,8 @@
     --info: #007FFF; --success: #228B22; --warning: #B38600; --error: #C70039;
     --bg-error: #FBE3E8; --bg-warning: #FFF6D6; --bg-success: #E3F3E8;
     --border: #D0D7DE; --radius: 6px;
-    /* Process Block states from the Penpot library: Hovered = 4/4 drop shadow, Selected = spread-4 halo */
-    --shadow-hover: rgba(0,0,0,.2); --shadow-sel: rgba(0,0,0,.2);
+    /* Shadow tokens (tokens.json): shadow.hovered = 4/4 drop shadow blur 4, shadow.selected = spread-4 halo blur 2, foreground.base at 40 % */
+    --shadow-hover: rgba(13,17,23,.4); --shadow-sel: rgba(13,17,23,.4);
     --font: "Source Sans 3", "Source Sans Pro", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     /* The shared AI panel (ai-assist.js) reads the HFA DS token names; this tool's variables carry the same values. */
@@ -44,7 +44,7 @@
       --info: #58A6FF; --success: #3FB950; --warning: #FFC300; --error: #E03E3E;
       --bg-error: #602A36; --bg-warning: #6B5414; --bg-success: #1A5A42;
       --border: #4A515B; color-scheme: dark;
-      --shadow-hover: rgba(0,0,0,.55); --shadow-sel: rgba(250,251,252,.35);
+      --shadow-hover: rgba(250,251,252,.4); --shadow-sel: rgba(250,251,252,.4);
     }
   }
   :root[data-theme="dark"] {
@@ -54,7 +54,7 @@
     --info: #58A6FF; --success: #3FB950; --warning: #FFC300; --error: #E03E3E;
     --bg-error: #602A36; --bg-warning: #6B5414; --bg-success: #1A5A42;
     --border: #4A515B; color-scheme: dark;
-    --shadow-hover: rgba(0,0,0,.55); --shadow-sel: rgba(250,251,252,.35);
+    --shadow-hover: rgba(250,251,252,.4); --shadow-sel: rgba(250,251,252,.4);
   }
 
   * { box-sizing: border-box; }
@@ -66,6 +66,12 @@
     padding: 5px 10px; cursor: pointer; white-space: nowrap;
   }
   button:hover { border-color: var(--fg-subtle); }
+  #helpDlg { max-width: 460px; background: var(--bg-elev); color: var(--fg); border: 1px solid var(--fg-muted); border-radius: 8px; padding: 16px; }
+  #helpDlg::backdrop { background: rgba(0,0,0,.4); }
+  #helpDlg h2 { margin: 0 0 8px; font-size: 16px; }
+  #helpDlg ul { padding-left: 18px; }
+  #helpDlg select, #helpDlg button { min-height: 28px; }
+  #helpDlg form { margin-top: 12px; text-align: right; }
   button.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
   button:disabled { opacity: .5; cursor: default; }
   select, input[type=text], input[type=password], input[type=url], input[type=number] {
@@ -197,7 +203,7 @@
   <section class="panel" id="leftPanel" aria-label="STPA control structure editor">
     <div class="bar">
       <h2>Control structure</h2>
-      <select id="preset" aria-label="Load preset"><option value="">Load preset…</option></select>
+      <button id="helpBtn" type="button" aria-label="Help – Keyboard shortcuts" aria-keyshortcuts="?" title="Help – Keyboard shortcuts (?)">?</button>
       <button id="formatBtn" title="Pretty-print JSON">Format</button>
       <button id="importBtn" title="Open a .json file">Open…</button>
       <button id="exportBtn" title="Save the structure as a JSON file">Save</button>
@@ -269,6 +275,24 @@
 
 </main>
 
+<dialog id="helpDlg" aria-labelledby="helpTitle">
+  <h2 id="helpTitle">Help – Keyboard shortcuts</h2>
+  <p>The underlined letter is the key. Press it alone, without Alt.</p>
+  <ul>
+    <li><b>B</b> Add Below – a block below the selected block</li>
+    <li><b>S</b> Add Beside – a block beside the selected block</li>
+    <li><b>Arrows</b> – move the indication to the nearest block</li>
+    <li><b>Ctrl/⌘+Enter</b> – select the indicated object (same as a click)</li>
+    <li><b>Enter</b> or <b>F2</b> – edit the name of the indicated object</li>
+    <li><b>Shift/Ctrl/⌘+click</b> – add or remove an object of the same kind</li>
+    <li><b>Delete</b> – delete the selected objects and their links</li>
+    <li><b>Esc</b> – leave a cell, then clear the selection</li>
+    <li><b>Ctrl/⌘+Z</b> – undo</li>
+    <li><b>?</b> – this help</li>
+  </ul>
+  <label>Open example… <select id="preset" aria-label="Open example…"><option value="">Open example…</option></select></label>
+  <form method="dialog"><button class="primary" id="helpClose" value="close">Close</button></form>
+</dialog>
 <div class="status" id="status" role="status" aria-live="polite"></div>
 
 <script src="ai-assist.js"></script>
@@ -969,7 +993,7 @@ function moveIndication([dx, dy]) {
   if (best) setIndicated(best.id);
 }
 document.addEventListener("keydown", (e) => {
-  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, dialog, [contenteditable]")) return;
   const cmd = e.ctrlKey || e.metaKey;
   if (e.key in ARROWS) { if (!cmd && !e.shiftKey) { e.preventDefault(); moveIndication(ARROWS[e.key]); } return; } // Ctrl/⌘+arrow is not used
   if (e.key === "Enter" && cmd && indicatedId) { e.preventDefault(); setSelection([indicatedId]); return; }
@@ -1052,14 +1076,33 @@ function addBeside() {
   focusRow(id);
   setStatus(`Added ${id} beside ${sel.map((it) => it.id).join(", ")}. Undo removes it.`);
 }
+/* Delete removes the selected objects and the links that start or end at them, as one undoable step (STPA-KEYS-3). */
+function deleteSelected() {
+  const ids = selectedItems().map((it) => it.id);
+  if (!ids.length) return;
+  editStructure((m) => {
+    const gone = new Set(ids);
+    ["control_actions", "feedback"].forEach((k) => (m[k] || []).forEach((x) => { if (x && (gone.has(x.source) || gone.has(x.target))) gone.add(x.id); }));
+    STRUCT_KEYS.forEach((k) => { if (Array.isArray(m[k])) m[k] = m[k].filter((x) => !(x && gone.has(x.id))); });
+    // a controller with nothing left under it is a controlled process again (STPA-TYPE-2)
+    (m.controllers || []).slice().forEach((c) => {
+      if (c && ids.some((id) => id !== c.id) && (m.controllers || []).length > 1 && !(m.control_actions || []).some((ca) => ca && ca.source === c.id)
+        && (currentModel.control_actions || []).some((ca) => ca && ca.source === c.id && gone.has(ca.target))) switchBlock(m, c.id, "controlled_processes");
+    });
+  }, `Deleted ${ids.join(", ")} with their links.`);
+  setSelection([]);
+}
+$("helpBtn").addEventListener("click", () => $("helpDlg").showModal());
 $("addBelowBtn").addEventListener("click", addBelow);
 $("addBesideBtn").addEventListener("click", addBeside);
 /* Bare letter keys are shortcuts only when no text is being edited. */
 document.addEventListener("keydown", (e) => {
-  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, dialog, [contenteditable]")) return;
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); $("undoBtn").click(); return; }
   if (e.ctrlKey || e.metaKey) return;
   const k = e.key.toLowerCase();
+  if (e.key === "?") { e.preventDefault(); $("helpDlg").showModal(); return; }
+  if (e.key === "Delete") { e.preventDefault(); deleteSelected(); return; }
   if (k === "b") { e.preventDefault(); if (canAddBelow()) addBelow(); }
   if (k === "s") { e.preventDefault(); if (canAddBelow()) addBeside(); }
 });
