@@ -211,7 +211,7 @@
       </section>
       <div id="issues" aria-live="polite"></div>
       <section class="view" id="vDiagram" aria-label="Diagram">
-        <div class="vbar"><button class="vtitle" type="button">Diagram</button></div>
+        <div class="vbar"><button class="vtitle" type="button">Diagram</button><button id="addBelowBtn" type="button" aria-keyshortcuts="B" title="Add a block below the selected block, linked with a control action and feedback" disabled>Add <u>B</u>elow</button><button id="addBesideBtn" type="button" aria-keyshortcuts="S" title="Add a block beside the selected block, with the same parent" disabled>Add Be<u>s</u>ide</button></div>
         <div class="vbody">
           <div id="diagramPane">
             <div class="legend">
@@ -874,6 +874,7 @@ function applySelection() {
     el.classList.toggle("sel", el.dataset.sel.split(",").some((id) => selection.has(id)));
     el.classList.toggle("editing", !!editingId && el.dataset.sel.split(",").includes(editingId));
   });
+  $("addBelowBtn").disabled = $("addBesideBtn").disabled = !canAddBelow();
   const items = selectedItems(), bar = $("selBar");
   bar.replaceChildren();
   const btn = (text, title, onClick, disabled) => {
@@ -954,6 +955,63 @@ function convertSelected(to) {
   setSelection(next);
   setStatus(`Converted ${done.join(", ")}. Ctrl/⌘+Z in the editor undoes it.`);
 }
+
+/* Add Below (design-stpa.md, STPA-ADD): a new controlled process under each selected controller or process,
+   linked with an unlabelled control action down and unlabelled feedback up. A selected controlled process becomes
+   a controller (STPA-TYPE-1). The whole addition is one editor change, so one Undo removes it. */
+const canAddBelow = () => selectedItems().some((it) => it.kind === "controllers" || it.kind === "controlled_processes");
+function addBelow() {
+  if (!currentModel) return;
+  const m = structuredClone(currentModel);
+  const parents = selectedItems(m).filter((it) => it.kind === "controllers" || it.kind === "controlled_processes").map((it) => it.id);
+  if (!parents.length) { setStatus("Select a controller or a process first."); return; }
+  parents.forEach((pid) => { if (blockKindOf(m, pid) === "controlled_processes") switchBlock(m, pid, "controllers"); });
+  const id = nextId(m, "p");
+  (m.controlled_processes ||= []).push({ id, name: "", states: [] });
+  parents.forEach((pid) => {
+    (m.control_actions ||= []).push({ id: nextId(m, "ca"), source: pid, target: id, action: "" });
+    (m.feedback ||= []).push({ id: nextId(m, "fb"), source: id, target: pid, signal: "" });
+  });
+  replaceEditor(m);
+  setSelection([id]);
+  focusRow(id);
+  setStatus(`Added ${id} below ${parents.join(", ")}. Undo removes it.`);
+}
+/** Add Beside (STPA-ADD-4, 7): a new block on the same level, linked to the same parents. Blocks with different parents give a message and no change. */
+const parentsOf = (m, id) => (m.control_actions || []).filter((ca) => ca && ca.target === id).map((ca) => ca.source).sort().join(",");
+function addBeside() {
+  if (!currentModel) return;
+  const m = structuredClone(currentModel);
+  const sel = selectedItems(m).filter((it) => it.kind === "controllers" || it.kind === "controlled_processes");
+  if (!sel.length) { setStatus("Select a controller or a process first."); return; }
+  const key = parentsOf(m, sel[0].id);
+  if (sel.some((it) => parentsOf(m, it.id) !== key)) { setStatus("The selected blocks do not have the same parent, so nothing was added."); return; }
+  const parents = key ? key.split(",") : [];
+  const id = nextId(m, parents.length || sel[0].kind === "controlled_processes" ? "p" : "c");
+  if (parents.length) (m.controlled_processes ||= []).push({ id, name: "", states: [] });
+  else (m.controllers ||= []).push({ id, name: "", process_model: { variables: [], assumptions: [] } });
+  parents.forEach((pid) => {
+    (m.control_actions ||= []).push({ id: nextId(m, "ca"), source: pid, target: id, action: "" });
+    (m.feedback ||= []).push({ id: nextId(m, "fb"), source: id, target: pid, signal: "" });
+  });
+  replaceEditor(m);
+  setSelection([id]);
+  focusRow(id);
+  setStatus(`Added ${id} beside ${sel.map((it) => it.id).join(", ")}. Undo removes it.`);
+}
+$("addBelowBtn").addEventListener("click", addBelow);
+$("addBesideBtn").addEventListener("click", addBeside);
+/* Bare letter keys are shortcuts only when no text is being edited. */
+document.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); $("undoBtn").click(); return; }
+  if (e.ctrlKey || e.metaKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "b") { e.preventDefault(); if (canAddBelow()) addBelow(); }
+  if (k === "s") { e.preventDefault(); if (canAddBelow()) addBeside(); }
+});
+/* Esc leaves a table cell without undoing anything. */
+$("structureWrap").addEventListener("keydown", (e) => { if (e.key === "Escape" && e.target.matches("input, textarea, select")) e.target.blur(); });
 
 /* Switching changes a process block's type (controller, controlled process, actuator, sensor) and keeps its id,
    name and links. Fields that only the old type has are kept under "switched_from" and come back when the
@@ -1259,6 +1317,7 @@ function deleteElement(id) {
   let removed = [];
   editStructure((m) => {
     const links = new Set([id]);
+    const wasParents = (m.control_actions || []).filter((ca) => ca && ca.target === id).map((ca) => ca.source);
     ["control_actions", "feedback"].forEach((k) => (Array.isArray(m[k]) ? m[k] : []).forEach((x) => { if (x && (x.source === id || x.target === id)) links.add(x.id); }));
     STRUCT_KEYS.forEach((k) => {
       if (!Array.isArray(m[k])) return;
@@ -1266,6 +1325,10 @@ function deleteElement(id) {
       m[k] = m[k].filter((x) => !(x && links.has(x.id)));
     });
     if (!removed.length) return false;
+    // A controller with nothing left under it is the lowest block again: a controlled process (STPA-TYPE-2).
+    wasParents.forEach((pid) => {
+      if (blockKindOf(m, pid) === "controllers" && (m.controllers || []).length > 1 && !(m.control_actions || []).some((ca) => ca && ca.source === pid)) switchBlock(m, pid, "controlled_processes");
+    });
   });
   if (removed.length) setStatus(`Deleted ${removed.join(", ")}. Undo reverts it.`);
 }
