@@ -103,10 +103,10 @@
   .panel > .pbody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
   /* Views: each has a bar with its title (click to compress) and an Expand button. A compressed view keeps its
      body rendered at zero height, so the JSON editor can still take focus for undoable edits. */
-  .view { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 120px; border-top: 1px solid var(--border); }
-  .view:first-child { border-top: 0; }
+  .view { display: flex; flex-direction: column; flex: 1 1 0; min-height: 120px; border-top: 1px solid var(--border); }
+  #vDiagram, #vStructure { border-top: 0; } /* the first view of each panel: both title bars start at the panel's top edge */
   .view[hidden] { display: none; }
-  .view > .vbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; background: var(--bg-elev); }
+  .view > .vbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; min-height: 34px; background: var(--bg-elev); }
   .view > .vbar .vtitle { margin-right: auto; border: 0; background: none; padding: 2px 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-muted); }
   .view > .vbar .vtitle::before { content: "▾ "; font-weight: 400; }
   .view > .vbody { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
@@ -129,8 +129,9 @@
   #issues .err { background: var(--bg-error); }
   #issues .warn { background: var(--bg-warning); }
   #issues .ok { background: var(--bg-success); }
-  #diagramWrap { border-top: 1px solid var(--border); overflow: auto; min-height: 200px; max-height: 46vh; background: var(--bg); flex: 1 1 auto; }
+  #diagramWrap { border-top: 1px solid var(--border); overflow: auto; min-height: 0; background: var(--bg); flex: 1 1 0; }
   #vDiagram > .vbody { overflow: hidden; }
+  #diagramPane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   #diagram { display: block; user-select: none; -webkit-user-select: none; }
   /* Expanded view: the legend, diagram and selection bar cover the whole page; the SVG scales to fit (viewBox keeps the aspect). */
   #diagramPane.full { position: fixed; inset: 0; z-index: 9; background: var(--bg-elev); display: flex; flex-direction: column; }
@@ -162,7 +163,7 @@
   #selBar .selcmds { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; width: 100%; }
   .selchip { display: inline-flex; align-items: center; gap: 2px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px; padding: 0 2px 0 8px; color: var(--fg); }
   .selchip button { border: 0; background: none; padding: 0 5px; font-size: 12px; line-height: 18px; color: var(--fg-muted); }
-  .tables { border-top: 1px solid var(--border); max-height: 32vh; overflow: auto; }
+  .tables { border-top: 1px solid var(--border); overflow: auto; }
   .tables details { border-bottom: 1px solid var(--border); }
   .tables summary { cursor: pointer; padding: 7px 10px; font-size: 13px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 6px; }
   .tables summary::-webkit-details-marker { display: none; }
@@ -224,7 +225,6 @@
         <div class="vbar"><button class="vtitle" type="button">JSON</button></div>
         <div class="vbody"><textarea id="editor" spellcheck="false" aria-label="STPA JSON"></textarea></div>
       </section>
-      <div id="issues" aria-live="polite"></div>
       <section class="view" id="vDiagram" aria-label="Diagram">
         <div class="vbar"><button class="vtitle" type="button">Diagram</button><button id="addBelowBtn" type="button" aria-keyshortcuts="B" title="Add a block below the selected block, linked with a control action and feedback" disabled>Add <u>B</u>elow</button><button id="addBesideBtn" type="button" aria-keyshortcuts="S" title="Add a block beside the selected block, with the same parent" disabled>Add Be<u>s</u>ide</button></div>
         <div class="vbody">
@@ -238,6 +238,7 @@
           </div>
         </div>
       </section>
+      <div id="issues" aria-live="polite"></div>
     </div>
   </section>
 
