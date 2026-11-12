@@ -83,7 +83,7 @@
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     padding: 8px 16px; background: var(--bg-elev); border-bottom: 1px solid var(--border);
   }
-  /* Same button colour as in the AI panel header, so the panel toggle looks the same wherever it sits (design principle 4.7). */
+  /* Title bar buttons use the base background (design principle 4.10). */
   header button:not(.primary) { background: var(--bg); }
   header h1 { font-size: 16px; margin: 0 auto 0 0; display: flex; align-items: center; gap: 8px; }
   header h1 .mark { width: 10px; height: 10px; border-radius: 2px; background: var(--brand); }
@@ -99,6 +99,18 @@
   /* Compact buttons (4.10): 28 px high */
   header button, .view > .vbar button:not(.vtitle) { min-height: 28px; padding: 0 10px; font-size: 14px; border-radius: 8px; }
   header .cmds { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  /* Theme toggle (4.10): a 44 × 24 switch (Theme in HFA DS). The knob is at the left with a sun in the light theme and at the right with a moon in the dark theme. */
+  button.theme-toggle { position: relative; width: 44px; height: 24px; min-height: 0; padding: 0; margin: 0; flex: none; cursor: pointer;
+    background: var(--color-background-sunken); border: 1px solid var(--color-foreground-muted); border-radius: 12px; box-shadow: none; }
+  button.theme-toggle:hover { border-color: var(--color-foreground); }
+  button.theme-toggle .knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+    background: var(--color-background-elevated); border: 1px solid var(--color-foreground-muted); color: var(--color-foreground); transition: left .15s; }
+  button.theme-toggle .knob svg { width: 14px; height: 14px; }
+  button.theme-toggle .knob .moon, button.theme-toggle[aria-checked="true"] .knob .sun { display: none; }
+  button.theme-toggle[aria-checked="true"] .knob .moon { display: block; }
+  button.theme-toggle[aria-checked="true"] .knob { left: 22px; }
+  /* The AI panel (ai-assist.js) is a card under the title bar; it keeps the main padding as its gutters. */
+  body { --ai-right: 16px; --ai-bottom: 12px; }
   .panel { background: var(--bg-elev); border: 1px solid var(--fg-muted); border-radius: 8px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   .panel > .pbody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
   /* Views: each has a bar with its title (click to compress) and an Expand button. A compressed view keeps its
@@ -213,7 +225,7 @@
     <input type="file" id="fileInput" accept=".json,application/json" hidden>
   </div>
   <div class="row">
-    <button id="themeBtn" title="Toggle light/dark theme">Theme</button>
+    <button type="button" class="theme-toggle" id="themeBtn" role="switch" aria-checked="false" aria-label="Dark theme" title="Switch between the light and the dark theme"><span class="knob" aria-hidden="true"><svg class="sun" viewBox="0 0 14 14"><circle cx="7" cy="7" r="3" fill="none" stroke="currentColor" stroke-width="1.1"/><path d="M7 .5v2M7 11.5v2M.5 7h2M11.5 7h2M2.4 2.4l1.4 1.4M10.2 10.2l1.4 1.4M2.4 11.6l1.4-1.4M10.2 3.8l1.4-1.4" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg><svg class="moon" viewBox="0 0 14 14"><path d="M11.5 9A5 5 0 0 1 5 2.5a5 5 0 1 0 6.5 6.5z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg></span></button>
   </div>
 </header>
 
@@ -1696,7 +1708,7 @@ window.STPAAssist = HFAAssist.mount({
   id: "stpa",
   title: "STPA analysis",
   subject: "the control structure",
-  toolbar: document.querySelector("header .row"),
+  content: document.querySelector("main"),
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   schemaPrompt: () => STRUCTURE_PROMPT + (lastValidation.errors.length
     ? `\n\nNote: the editor currently has errors (${lastValidation.errors.join("; ")}); the last valid version is shown.` : ""),
@@ -1753,17 +1765,22 @@ document.addEventListener("keydown", (e) => {
 });
 
 
+/* The theme follows the system until the user chooses; the switch shows the theme in use. */
+const isDark = () => document.documentElement.dataset.theme
+  ? document.documentElement.dataset.theme === "dark"
+  : matchMedia("(prefers-color-scheme: dark)").matches;
+const syncThemeToggle = () => $("themeBtn").setAttribute("aria-checked", String(isDark()));
 $("themeBtn").addEventListener("click", () => {
-  const dark = document.documentElement.dataset.theme
-    ? document.documentElement.dataset.theme === "dark"
-    : matchMedia("(prefers-color-scheme: dark)").matches;
-  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  document.documentElement.dataset.theme = isDark() ? "light" : "dark";
   store.set("theme", document.documentElement.dataset.theme);
+  syncThemeToggle();
 });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", syncThemeToggle);
 
 /* ── Boot ─────────────────────────────────────────────────────────────── */
 (function boot() {
   const theme = store.get("theme"); if (theme) document.documentElement.dataset.theme = theme;
+  syncThemeToggle();
   applyViews();
   ["scLosses", "scHazards", "scUcas", "scConstraints", "stBlocks", "stCas", "stFbs"].forEach((id) => {
     const el = $(id), saved = store.get("open:" + id);
