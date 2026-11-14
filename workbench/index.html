@@ -317,6 +317,7 @@
     <li><b>Delete</b> – delete the selected objects and their links</li>
     <li><b>Esc</b> – leave a cell, then clear the selection</li>
     <li><b>Ctrl/⌘+Z</b> – undo</li>
+    <li><b>Ctrl/⌘+Shift+Z</b> or <b>Ctrl+Y</b> – redo</li>
     <li><b>?</b> – this help</li>
   </ul>
   <label>Open example… <select id="preset" aria-label="Open example…"><option value="">Open example…</option></select></label>
@@ -1163,6 +1164,7 @@ $("addBesideBtn").addEventListener("click", addBeside);
 document.addEventListener("keydown", (e) => {
   if (e.defaultPrevented || e.altKey || e.target.closest?.("input, textarea, select, dialog, [role=separator], [contenteditable]")) return;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); stepHistory(e.shiftKey ? 1 : -1); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); stepHistory(1); return; } // redo, as in HTA and Bowtie
   if (e.ctrlKey || e.metaKey) return;
   const k = e.key.toLowerCase();
   if (e.key === "?") { e.preventDefault(); $("helpDlg").showModal(); return; }
