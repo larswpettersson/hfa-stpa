@@ -6,16 +6,35 @@ import { readFile, writeFile } from 'node:fs/promises';
 const root = new URL('../', import.meta.url);
 const read = (p) => readFile(new URL(p, root), 'utf8');
 
-const { outputFiles } = await build({
-  entryPoints: [new URL('src/index.ts', root).pathname],
-  bundle: true,
-  format: 'iife',
-  globalName: 'mermaidStpa',
-  minify: true,
-  write: false,
-});
-const plugin = outputFiles[0].text;
-const mermaid = await read('node_modules/mermaid/dist/mermaid.min.js');
+const common = { bundle: true, format: 'iife', minify: true, write: false, legalComments: 'none' };
+
+// Mermaid loads every built-in diagram type, the ELK/cytoscape layouts and
+// KaTeX through dynamic import(). The STPA diagram needs none of them, so
+// they are replaced with a stub that throws. This takes mermaid from ~5 MB
+// (mermaid.min.js) to ~0.6 MB. Only STPA diagrams render in the result.
+const stubDynamicImports = {
+  name: 'stub-dynamic-imports',
+  setup(b) {
+    b.onResolve({ filter: /.*/ }, (a) =>
+      a.kind === 'dynamic-import' && a.importer.includes('node_modules')
+        ? { path: a.path, namespace: 'stub' }
+        : undefined,
+    );
+    b.onLoad({ filter: /.*/, namespace: 'stub' }, (a) => ({
+      contents: `throw new Error(${JSON.stringify(`not included in offline build: ${a.path}`)});`,
+      loader: 'js',
+    }));
+  },
+};
+
+const [mermaid, plugin] = await Promise.all([
+  build({
+    ...common,
+    stdin: { contents: "import m from 'mermaid'; window.mermaid = m;", resolveDir: root.pathname },
+    plugins: [stubDynamicImports],
+  }),
+  build({ ...common, entryPoints: [new URL('src/index.ts', root).pathname], globalName: 'mermaidStpa' }),
+]).then((rs) => rs.map((r) => r.outputFiles[0].text));
 const html = await read('demo/index.html');
 
 const boot = `(async () => {
